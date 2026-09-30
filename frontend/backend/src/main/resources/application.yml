@@ -1,0 +1,31 @@
+server:
+  port: 8080
+  error:
+    include-message: never
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/kiet_news_hub}
+    username: ${DATABASE_USER:kiet}
+    password: ${DATABASE_PASSWORD:kiet_demo_password}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  servlet:
+    multipart:
+      max-file-size: 300MB
+      max-request-size: 302MB
+hub:
+  auth:
+    super-admin-email: ${SUPER_ADMIN_EMAIL:}
+  jwt:
+    secret: ${JWT_SECRET:a2lldC1uZXdzLWh1Yi1kZW1vLXNlY3JldC1yZXBsYWNlLWluLXByb2R1Y3Rpb24=}
+    expiration-minutes: ${JWT_EXPIRATION_MINUTES:60}
+  storage:
+    local-directory: ${UPLOAD_DIRECTORY:./uploads}
+  ml:
+    url: ${ML_SERVICE_URL:http://localhost:8000}
+    api-key: ${ML_API_KEY:demo-local-ml-key}
+  news:
+    feed-urls: ${NEWS_FEED_URLS:}
+    refresh-ms: ${NEWS_REFRESH_MS:1800000}

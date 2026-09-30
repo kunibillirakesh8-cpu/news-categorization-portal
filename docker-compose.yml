@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: kiet_news_hub
+      POSTGRES_USER: kiet
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-kiet_demo_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kiet -d kiet_news_hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  ml-service:
+    build: ./ml-service
+    environment:
+      ML_API_KEY: ${ML_API_KEY:-demo-local-ml-key}
+    expose:
+      - "8000"
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/kiet_news_hub
+      DATABASE_USER: kiet
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-kiet_demo_password}
+      JWT_SECRET: ${JWT_SECRET:-a2lldC1uZXdzLWh1Yi1kZW1vLXNlY3JldC1yZXBsYWNlLWluLXByb2R1Y3Rpb24=}
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
+      ML_SERVICE_URL: http://ml-service:8000
+      ML_API_KEY: ${ML_API_KEY:-demo-local-ml-key}
+      NEWS_FEED_URLS: ${NEWS_FEED_URLS:-}
+      NEWS_REFRESH_MS: ${NEWS_REFRESH_MS:-1800000}
+      UPLOAD_DIRECTORY: /data/uploads
+    volumes:
+      - uploads_data:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ml-service:
+        condition: service_started
+    expose:
+      - "8080"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8088:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  uploads_data:
