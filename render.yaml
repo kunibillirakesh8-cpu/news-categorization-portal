@@ -59,8 +59,9 @@ services:
         value: 8080
 
   # Frontend Web App (React / Vite)
-  - type: static
+  - type: web
     name: kiet-news-frontend
+    runtime: static
     buildCommand: npm install && npm run build
     staticPublishPath: ./dist
     rootDir: frontend
