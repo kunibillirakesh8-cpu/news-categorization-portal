@@ -1,0 +1,73 @@
+databases:
+  - name: kiet-news-db
+    databaseName: kiet_news_hub
+    user: kiet
+    plan: free
+
+services:
+  # ML Classifier Service (FastAPI)
+  - type: web
+    name: kiet-ml-service
+    env: docker
+    dockerfilePath: ./ml-service/Dockerfile
+    dockerContext: ./ml-service
+    plan: free
+    envVars:
+      - key: ML_API_KEY
+        generateValue: true
+
+  # Backend REST API (Spring Boot)
+  - type: web
+    name: kiet-news-backend
+    env: docker
+    dockerfilePath: ./frontend/backend/Dockerfile
+    dockerContext: ./frontend/backend
+    plan: free
+    envVars:
+      - key: DATABASE_HOST
+        fromDatabase:
+          name: kiet-news-db
+          property: host
+      - key: DATABASE_PORT
+        fromDatabase:
+          name: kiet-news-db
+          property: port
+      - key: DATABASE_USER
+        fromDatabase:
+          name: kiet-news-db
+          property: user
+      - key: DATABASE_PASSWORD
+        fromDatabase:
+          name: kiet-news-db
+          property: password
+      - key: DATABASE_NAME
+        fromDatabase:
+          name: kiet-news-db
+          property: database
+      - key: SUPER_ADMIN_EMAIL
+        value: kunibillirakesh8@gmail.com
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ML_SERVICE_URL
+        value: http://kiet-ml-service:8000
+      - key: ML_API_KEY
+        fromService:
+          type: web
+          name: kiet-ml-service
+          envVarKey: ML_API_KEY
+      - key: PORT
+        value: 8080
+
+  # Frontend Web App (React / Vite)
+  - type: static
+    name: kiet-news-frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    rootDir: frontend
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://kiet-news-backend.onrender.com/api/*
+      - type: rewrite
+        source: /*
+        destination: /index.html

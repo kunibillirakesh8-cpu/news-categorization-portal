@@ -4,7 +4,7 @@ server:
     include-message: never
 spring:
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/kiet_news_hub}
+    url: ${DATABASE_URL:jdbc:postgresql://${DATABASE_HOST:localhost}:${DATABASE_PORT:5432}/${DATABASE_NAME:kiet_news_hub}}
     username: ${DATABASE_USER:kiet}
     password: ${DATABASE_PASSWORD:kiet_demo_password}
   jpa:
