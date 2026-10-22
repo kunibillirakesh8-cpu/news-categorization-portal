@@ -39,7 +39,7 @@ public class AuthController {
     public AuthResponse login(@Valid @RequestBody LoginRequest request) {
         HubUser user = users.findByUsernameIgnoreCase(request.username().trim())
                 .filter(candidate -> passwordEncoder.matches(request.password(), candidate.getPasswordHash()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or password."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password."));
         if (user.isSuspended()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This account is suspended.");
         return response(user);
     }
@@ -50,7 +50,7 @@ public class AuthController {
 
     public record RegisterRequest(@NotBlank @Pattern(regexp = "[A-Za-z0-9._]{3,30}") String username,
                                   @NotBlank @Size(min = 2, max = 90) String displayName,
-                                  @NotBlank @Size(min = 12, max = 128) String password) {}
+                                  @NotBlank @Size(min = 6, max = 128) String password) {}
     public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
     public record AuthResponse(String accessToken, Long userId, String username, String displayName, String role) {}
 }
