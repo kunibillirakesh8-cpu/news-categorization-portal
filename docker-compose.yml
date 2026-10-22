@@ -21,7 +21,7 @@ services:
       - "8000"
 
   backend:
-    build: ./frontend/backend
+    build: ./backend
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/kiet_news_hub
       DATABASE_USER: kiet

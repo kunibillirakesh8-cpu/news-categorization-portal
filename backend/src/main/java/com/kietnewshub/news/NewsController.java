@@ -1,6 +1,6 @@
 package com.kietnewshub.news;
 
-import com.kietnewshub.auth.Role;
+import com.kietnewshub.auth.HubUserRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -8,8 +8,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,22 +15,25 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentMap;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
@@ -46,30 +47,37 @@ import org.xml.sax.InputSource;
 public class NewsController {
     private static final Set<String> DAILY_CATEGORIES = Set.of("India", "Telangana", "Hyderabad", "Education", "Technology", "AI", "Science", "Business", "Sports", "Entertainment", "World", "Jobs");
     private final NewsClassificationService classifier;
+    private final UserNewsRepository userNews;
+    private final UserNewsMediaRepository userNewsMedia;
+    private final HubUserRepository users;
     private final List<NewsStory> demoStories = List.of(
-            new NewsStory("n1", "India’s next tech wave is being built far beyond its biggest metros", "A new generation of campuses and founders is redrawing the country’s innovation map.", "Technology", "The Daily Brief", "https://images.unsplash.com/photo-1519389950473-47ba0277781c", Instant.parse("2026-09-29T08:48:00Z")),
-            new NewsStory("n2", "Hyderabad expands its clean-mobility network with 40 new electric buses", "The city’s latest transport plan adds new routes connecting fast-growing neighbourhoods.", "Hyderabad", "City Desk", "https://images.unsplash.com/photo-1570168007204-dfb528c6958f", Instant.parse("2026-09-29T08:20:00Z")),
-            new NewsStory("n3", "Research teams turn agricultural waste into a lower-cost battery material", "The early-stage process could help make energy storage more affordable and local.", "Science", "Science Today", "https://images.unsplash.com/photo-1531482615713-2afd69097998", Instant.parse("2026-09-29T07:58:00Z")));
+            new NewsStory("n1", "India’s next tech wave is being built far beyond its biggest metros", "A new generation of campuses and founders is redrawing the country’s innovation map.", "Technology", "The Daily Brief", "https://images.unsplash.com/photo-1519389950473-47ba0277781c", Instant.parse("2026-09-29T08:48:00Z"), null, false),
+            new NewsStory("n2", "Hyderabad expands its clean-mobility network with 40 new electric buses", "The city’s latest transport plan adds new routes connecting fast-growing neighbourhoods.", "Hyderabad", "City Desk", "https://images.unsplash.com/photo-1570168007204-dfb528c6958f", Instant.parse("2026-09-29T08:20:00Z"), null, false),
+            new NewsStory("n3", "Research teams turn agricultural waste into a lower-cost battery material", "The early-stage process could help make energy storage more affordable and local.", "Science", "Science Today", "https://images.unsplash.com/photo-1531482615713-2afd69097998", Instant.parse("2026-09-29T07:58:00Z"), null, false));
     private final ConcurrentMap<String, NewsStory> collectedStories = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, NewsStory> userPublishedStories = new ConcurrentHashMap<>();
     private final RestClient restClient;
     private final String configuredFeeds;
-    private final Path uploadDirectory;
 
-    public NewsController(NewsClassificationService classifier, RestClient.Builder restClientBuilder,
-                          @Value("${hub.news.feed-urls:}") String configuredFeeds,
-                          @Value("${hub.storage.local-directory:./uploads}") String uploadDirectory) {
+    public NewsController(NewsClassificationService classifier, UserNewsRepository userNews,
+                          UserNewsMediaRepository userNewsMedia, HubUserRepository users,
+                          RestClient.Builder restClientBuilder,
+                          @Value("${hub.news.feed-urls:}") String configuredFeeds) {
         this.classifier = classifier;
+        this.userNews = userNews;
+        this.userNewsMedia = userNewsMedia;
+        this.users = users;
         this.restClient = restClientBuilder.build();
         this.configuredFeeds = configuredFeeds;
-        this.uploadDirectory = Path.of(uploadDirectory).toAbsolutePath().normalize().resolve("news");
         demoStories.forEach(story -> classifier.classify(story.id(), story.title(), story.summary()));
     }
 
     @GetMapping
     public List<NewsStory> stories(@RequestParam(required = false) String q,
-                                   @RequestParam(required = false) String category) {
-        return java.util.stream.Stream.of(demoStories.stream(), collectedStories.values().stream(), userPublishedStories.values().stream())
+                                   @RequestParam(required = false) String category,
+                                   Authentication authentication) {
+        var published = userNews.findAllByOrderByCreatedAtDesc().stream()
+                .map(story -> toNewsStory(story, authentication));
+        return java.util.stream.Stream.of(demoStories.stream(), collectedStories.values().stream(), published)
             .flatMap(stream -> stream)
                 .filter(story -> q == null || (story.title() + " " + story.summary()).toLowerCase().contains(q.toLowerCase()))
                 .filter(story -> category == null || story.category().equalsIgnoreCase(category))
@@ -122,8 +130,8 @@ public class NewsController {
             var classification = classifier.classify(key, title, summary);
             String image = firstMediaUrl(element);
             if (image.isBlank() || !image.startsWith("https://")) image = defaultImage(classification.category());
-            parsed.add(new NewsStory("n-feed-" + key, clean(title), clean(summary), classification.category(), source,
-                    image, Instant.now()));
+                parsed.add(new NewsStory("n-feed-" + key, clean(title), clean(summary), classification.category(), source,
+                    image, Instant.now(), null, false));
         }
         return parsed;
     }
@@ -169,45 +177,56 @@ public class NewsController {
         return classifier.classify("draft-" + java.util.UUID.randomUUID(), request.title(), request.body());
     }
 
-    @GetMapping("/media/{filename:.+}")
-    public ResponseEntity<Resource> publishedImage(@org.springframework.web.bind.annotation.PathVariable String filename) {
-        if (!filename.matches("[a-f0-9-]+\\.(jpg|png|webp)")) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
-        String publicPath = "/api/news/media/" + filename;
-        boolean referenced = userPublishedStories.values().stream().anyMatch(story -> story.image().equals(publicPath));
-        Path imagePath = uploadDirectory.resolve(filename).normalize();
-        if (!referenced || !imagePath.startsWith(uploadDirectory) || !Files.isRegularFile(imagePath)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
-        }
-        MediaType mediaType = filename.endsWith(".jpg") ? MediaType.IMAGE_JPEG
-                : filename.endsWith(".png") ? MediaType.IMAGE_PNG : MediaType.parseMediaType("image/webp");
-        return ResponseEntity.ok().contentType(mediaType).header("X-Content-Type-Options", "nosniff")
-                .body(new FileSystemResource(imagePath));
+        @GetMapping("/media/{id}")
+        public ResponseEntity<byte[]> publishedImage(@PathVariable Long id) {
+            UserNewsMedia media = userNewsMedia.findById(id)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+            return ResponseEntity.ok().contentType(MediaType.parseMediaType(media.getContentType()))
+                .header("X-Content-Type-Options", "nosniff").body(media.getData());
     }
 
     @PostMapping(consumes = "multipart/form-data")
     @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
+    @Transactional
     public NewsStory publish(@RequestParam @NotBlank @Size(max = 180) String title,
                              @RequestParam @NotBlank @Size(max = 1000) String summary,
                              @RequestParam @NotBlank @Size(max = 20000) String body,
                              @RequestParam @NotBlank @Size(max = 90) String source,
                              @RequestParam @NotBlank String category,
-                             @RequestParam(required = false) @Size(max = 1000) String coverUrl,
-                             @RequestParam(required = false) MultipartFile photo) throws IOException {
+                             @RequestParam("photo") MultipartFile photo,
+                             Authentication authentication) throws IOException {
         if (!DAILY_CATEGORIES.contains(category)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a supported Daily News category.");
-        String imageUrl = coverUrl == null ? "" : coverUrl.trim();
-        if (photo != null && !photo.isEmpty()) {
-            imageUrl = storeGeneratedPhoto(photo);
-        } else if (!imageUrl.startsWith("https://")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A public HTTPS cover image is required.");
-        }
-        String id = "user-" + java.util.UUID.randomUUID();
-        classifier.classify(id, title, body);
-        NewsStory story = new NewsStory(id, title.trim(), summary.trim(), category, source.trim(), imageUrl, Instant.now());
-        userPublishedStories.put(id, story);
-        return story;
+        if (photo.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add a photo to publish this news story.");
+        String contentType = validateGeneratedPhoto(photo);
+        var author = users.findByUsernameIgnoreCase(authentication.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        classifier.classify("draft-" + java.util.UUID.randomUUID(), title, body);
+        UserNewsStory saved = userNews.save(new UserNewsStory(author, title.trim(), summary.trim(), body.trim(), category, contentType));
+        userNewsMedia.save(new UserNewsMedia(saved.getId(), contentType, photo.getBytes()));
+        return toNewsStory(saved, authentication);
     }
 
-    private String storeGeneratedPhoto(MultipartFile photo) throws IOException {
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
+    @Transactional
+    public void delete(@PathVariable String id, Authentication authentication) {
+        if (!id.matches("user-\\d+")) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        long databaseId = Long.parseLong(id.substring("user-".length()));
+        UserNewsStory story = userNews.findByIdAndAuthorUsernameIgnoreCase(databaseId, authentication.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        userNewsMedia.deleteById(story.getId());
+        userNews.delete(story);
+    }
+
+    private NewsStory toNewsStory(UserNewsStory story, Authentication authentication) {
+        String publicId = "user-" + story.getId();
+        boolean owner = authentication != null && story.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
+        return new NewsStory(publicId, story.getTitle(), story.getSummary(), story.getCategory(),
+                story.getAuthor().getDisplayName(), "/api/news/media/" + story.getId(), story.getCreatedAt(),
+                story.getBody(), owner);
+    }
+
+    private String validateGeneratedPhoto(MultipartFile photo) throws IOException {
         if (photo.getSize() > 10L * 1024 * 1024) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Article photos must be 10 MB or smaller.");
         String contentType = photo.getContentType();
         if (contentType == null || !Set.of("image/jpeg", "image/png", "image/webp").contains(contentType.toLowerCase())) {
@@ -222,15 +241,10 @@ public class NewsController {
             default -> false;
         };
         if (!validSignature) throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "The photo contents do not match the selected image type.");
-        Files.createDirectories(uploadDirectory);
-        String extension = switch (contentType.toLowerCase()) { case "image/jpeg" -> ".jpg"; case "image/png" -> ".png"; default -> ".webp"; };
-        String filename = java.util.UUID.randomUUID() + extension;
-        Path target = uploadDirectory.resolve(filename).normalize();
-        if (!target.startsWith(uploadDirectory)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
-        photo.transferTo(target);
-        return "/api/news/media/" + filename;
+        return contentType.toLowerCase();
     }
 
-    public record NewsStory(String id, String title, String summary, String category, String source, String image, Instant publishedAt) {}
+    public record NewsStory(String id, String title, String summary, String category, String source, String image,
+                            Instant publishedAt, String body, boolean ownedByCurrentUser) {}
     public record ClassifyRequest(@NotBlank @Size(max = 180) String title, @NotBlank @Size(max = 20000) String body) {}
 }

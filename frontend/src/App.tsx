@@ -5,7 +5,7 @@ import {
   ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown,
   Clock3, Compass, FileText, Filter, Flag, Globe2, GraduationCap, Heart, ImagePlus,
   LayoutDashboard, LogOut, Menu, MessageCircle, MoreHorizontal, Newspaper, Plus,
-  Search, Send, Settings2, Share2, Shield, Sparkles, TrendingUp, Upload, Users,
+  Search, Send, Settings2, Share2, Shield, Sparkles, TrendingUp, Trash2, Upload, Users,
   Video, X, Zap, Bell, Eye, type LucideIcon,
 } from 'lucide-react'
 import { articles, campusStories, categories, initialHighlights, photos } from './data'
@@ -34,11 +34,12 @@ const navGroups: { label: string; items: { page: Page; label: string; icon: Luci
 function App() {
   const [page, setPage] = useState<Page>('home')
   const [previousPage, setPreviousPage] = useState<Page>('home')
-  const [role, setRole] = useState<Role>('student')
+  const [role, setRole] = useState<Role>(() => (window.localStorage.getItem('kiet_role') as Role | null) ?? 'guest')
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem('kiet_access_token') ?? '')
+  const [accountName, setAccountName] = useState(() => window.localStorage.getItem('kiet_display_name') ?? '')
   const [authMode, setAuthMode] = useState<'register' | 'login' | null>(null)
   const [authName, setAuthName] = useState('')
-  const [authEmail, setAuthEmail] = useState('')
+  const [authUsername, setAuthUsername] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [authError, setAuthError] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
@@ -80,9 +81,9 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch('/api/highlights', { signal: controller.signal })
+    fetch('/api/highlights', { headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined, signal: controller.signal })
       .then((response) => response.ok ? response.json() : [])
-      .then((records: { id: number; author: string; caption: string; mediaUrl: string; mediaType: string; createdAt: string }[]) => {
+      .then((records: { id: number; author: string; caption: string; mediaUrl: string; mediaType: string; createdAt: string; ownedByCurrentUser: boolean }[]) => {
         if (!records.length) return
         const published: Highlight[] = records.map((record) => ({
           id: String(record.id),
@@ -96,22 +97,24 @@ function App() {
           time: new Date(record.createdAt).toLocaleDateString(),
           type: record.mediaType.startsWith('video/') ? 'video' : 'photo',
           status: 'published',
+          ownedByCurrentUser: record.ownedByCurrentUser,
         }))
         setHighlights((current) => [...published, ...current.filter((post) => !/^\d+$/.test(post.id))])
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [])
+  }, [authToken])
 
   useEffect(() => {
     if (!authToken || !['editor', 'admin', 'super-admin'].includes(role)) return
     const controller = new AbortController()
     fetch('/api/admin/kiet-news/pending', { headers: { Authorization: `Bearer ${authToken}` }, signal: controller.signal })
       .then((response) => response.ok ? response.json() : [])
-      .then((records: { id: string; title: string; summary: string; category: string; source: string; image: string; publishedAt: string }[]) => {
+      .then((records: { id: string; title: string; summary: string; category: string; source: string; image: string; publishedAt: string; body?: string; ownedByCurrentUser?: boolean }[]) => {
         const pending = records.map((record) => ({
           id: record.id, title: record.title, summary: record.summary, category: record.category,
           source: record.source, image: record.image || photos.campus, time: 'Pending editorial review', read: 'Pending review',
+          ownedByCurrentUser: record.ownedByCurrentUser,
         }))
         setCampusPending((current) => [...pending, ...current.filter((item) => !/^k-user-\d+$/.test(item.id))])
       })
@@ -121,9 +124,9 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch('/api/news', { signal: controller.signal })
+    fetch('/api/news', { headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined, signal: controller.signal })
       .then((response) => response.ok ? response.json() : [])
-      .then((records: { id: string; title: string; summary: string; category: string; source: string; image: string; publishedAt: string }[]) => {
+      .then((records: { id: string; title: string; summary: string; category: string; source: string; image: string; publishedAt: string; body?: string; ownedByCurrentUser?: boolean }[]) => {
         if (!records.length) return
         setDailyArticles((current) => {
           const byId = new Map(current.map((article) => [article.id, article]))
@@ -140,13 +143,13 @@ function App() {
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [])
+  }, [authToken])
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch('/api/kiet-news', { signal: controller.signal })
+    fetch('/api/kiet-news', { headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined, signal: controller.signal })
       .then((response) => response.ok ? response.json() : [])
-      .then((records: { id: string; title: string; summary: string; category: string; source: string; image: string; publishedAt: string }[]) => {
+      .then((records: { id: string; title: string; summary: string; category: string; source: string; image: string; publishedAt: string; ownedByCurrentUser?: boolean }[]) => {
         if (!records.length) return
         setOfficialCampusStories((current) => {
           const currentById = new Map(current.map((story) => [story.id, story]))
@@ -163,7 +166,7 @@ function App() {
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [])
+  }, [authToken])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -202,8 +205,25 @@ function App() {
     return () => controller.abort()
   }, [dailyArticles, officialCampusStories, language])
 
-  const canPost = role !== 'guest'
-  const isAdmin = ['admin', 'super-admin'].includes(role)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const newsId = params.get('news')
+    const postId = params.get('post')
+    if (newsId) {
+      const story = [...dailyArticles, ...officialCampusStories].find((item) => item.id === newsId)
+      if (!story) return
+      setActiveArticle(story)
+      setPage('article')
+    } else if (postId) {
+      const post = highlights.find((item) => item.id === postId)
+      if (!post) return
+      setPage('highlights')
+      setHighlights((current) => current[0]?.id === postId ? current : [post, ...current.filter((item) => item.id !== postId)])
+    }
+  }, [dailyArticles, highlights, officialCampusStories])
+
+  const canPost = Boolean(authToken)
+  const isAdmin = Boolean(authToken) && ['admin', 'super-admin'].includes(role)
   const pendingPosts = highlights.filter((post) => post.status === 'pending')
 
   const notify = (message: string) => {
@@ -217,16 +237,21 @@ function App() {
       return
     }
     setMobileNav(false)
+    window.history.replaceState(null, '', window.location.pathname)
     setPreviousPage(page === 'article' ? previousPage : page)
     setPage(next)
     if (next === 'search') setTimeout(() => document.getElementById('global-search')?.focus(), 20)
   }
 
-  const back = () => setPage(page === 'article' ? previousPage : 'home')
+  const back = () => {
+    window.history.replaceState(null, '', window.location.pathname)
+    setPage(page === 'article' ? previousPage : 'home')
+  }
 
   const requireAccount = () => {
     if (canPost) return true
-    notify('Sign in as a student to join the conversation.')
+    setAuthMode('login')
+    setAuthError('')
     return false
   }
 
@@ -240,15 +265,18 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authMode === 'register'
-          ? { email: authEmail, displayName: authName, password: authPassword }
-          : { email: authEmail, password: authPassword }),
+          ? { username: authUsername, displayName: authName, password: authPassword }
+          : { username: authUsername, password: authPassword }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.message ?? result.detail ?? 'Could not complete sign in.')
       const token = result.accessToken as string
       const nextRole = String(result.role).toLowerCase().replace('_', '-') as Role
       window.localStorage.setItem('kiet_access_token', token)
+      window.localStorage.setItem('kiet_role', nextRole)
+      window.localStorage.setItem('kiet_display_name', String(result.displayName ?? ''))
       setAuthToken(token)
+      setAccountName(String(result.displayName ?? ''))
       setRole(nextRole)
       setAuthMode(null)
       setAuthPassword('')
@@ -261,15 +289,18 @@ function App() {
   }
 
   const continueAsDemoStudent = () => {
-    setRole('student')
+    setRole('guest')
     setAuthMode(null)
     setAuthError('')
-    notify('Demo account activated as a student.')
+    notify('You are browsing as a guest. Sign in to publish.')
   }
 
   const signOut = () => {
     window.localStorage.removeItem('kiet_access_token')
+    window.localStorage.removeItem('kiet_role')
+    window.localStorage.removeItem('kiet_display_name')
     setAuthToken('')
+    setAccountName('')
     setRole('guest')
     notify('You are now browsing as a guest.')
   }
@@ -285,10 +316,25 @@ function App() {
     notify(saved.includes(id) ? 'Removed from your reading list.' : 'Saved to your reading list.')
   }
 
-  const share = async (title: string) => {
+  const share = async (title: string, id = '', type: 'news' | 'post' = 'news') => {
+    const url = new URL(window.location.href)
+    url.search = ''
+    if (!id) {
+      const story = [...localizedArticles, ...dailyArticles, ...officialCampusStories].find((item) => item.title === title)
+      const post = highlights.find((item) => item.caption === title)
+      if (story) {
+        id = story.id
+        type = 'news'
+      } else if (post) {
+        id = post.id
+        type = 'post'
+      }
+    }
+    if (!id) return notify('This item does not have a shareable link.')
+    url.searchParams.set(type, id)
     try {
-      if (navigator.share) await navigator.share({ title, url: window.location.href })
-      else if (navigator.clipboard) await navigator.clipboard.writeText(`${title} · KIET News Hub`)
+      if (navigator.share) await navigator.share({ title, url: url.toString() })
+      else if (navigator.clipboard) await navigator.clipboard.writeText(url.toString())
       notify('Story link ready to share.')
     } catch {
       notify('Sharing was cancelled.')
@@ -298,6 +344,37 @@ function App() {
   const openArticle = (article: Article) => {
     setActiveArticle(article)
     navigate('article')
+    const url = new URL(window.location.href)
+    url.searchParams.set('news', article.id)
+    window.history.replaceState(null, '', url)
+  }
+
+  const deleteArticle = async (article: Article) => {
+    if (!article.ownedByCurrentUser || !authToken) return
+    if (!window.confirm(`Delete “${article.title}”? This cannot be undone.`)) return
+    const endpoint = article.id.startsWith('k-user-') ? `/api/kiet-news/${article.id}` : `/api/news/${article.id}`
+    try {
+      const response = await fetch(endpoint, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } })
+      if (!response.ok) throw new Error('Could not delete this story.')
+      setDailyArticles((current) => current.filter((item) => item.id !== article.id))
+      setOfficialCampusStories((current) => current.filter((item) => item.id !== article.id))
+      notify('Your story and photo were deleted.')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not delete this story.')
+    }
+  }
+
+  const deleteHighlight = async (post: Highlight) => {
+    if (!post.ownedByCurrentUser || !authToken || !/^\d+$/.test(post.id)) return
+    if (!window.confirm('Delete this highlight and its uploaded media? This cannot be undone.')) return
+    try {
+      const response = await fetch(`/api/highlights/${post.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } })
+      if (!response.ok) throw new Error('Could not delete this highlight.')
+      setHighlights((current) => current.filter((item) => item.id !== post.id))
+      notify('Your highlight and media were deleted.')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not delete this highlight.')
+    }
   }
 
   const handleUploadPick = (file?: File) => {
@@ -320,13 +397,13 @@ function App() {
     const caption = newCaption.trim()
     const finishUpload = (id: string, mediaUrl?: string) => {
       const isVideo = file.type.startsWith('video/')
-      const localMediaUrl = URL.createObjectURL(file)
         setHighlights((current) => [{
-        id, name: 'Rakesh Kunibilli', handle: '@rakesh.k', caption,
-        image: isVideo ? photos.event : localMediaUrl, likes: 0,
-        mediaUrl: isVideo ? localMediaUrl : undefined,
+        id, name: accountName || 'Member', handle: `@${(accountName || 'member').toLowerCase().replace(/[^a-z0-9]+/g, '.')}`, caption,
+        image: isVideo ? photos.event : mediaUrl || photos.campus, likes: 0,
+        mediaUrl: isVideo ? mediaUrl : undefined,
         publishedMediaUrl: mediaUrl,
         time: 'Just now', type: isVideo ? 'video' : 'photo', status: 'published',
+        ownedByCurrentUser: true,
       }, ...current])
       setNewCaption('')
       setUploadFile(null)
@@ -359,16 +436,7 @@ function App() {
       request.send(formData)
       return
     }
-    let progress = 12
-    setUploadProgress(progress)
-    const timer = window.setInterval(() => {
-      progress = Math.min(progress + 22, 100)
-      setUploadProgress(progress)
-      if (progress >= 100) {
-        window.clearInterval(timer)
-        finishUpload(`p${Date.now()}`)
-      }
-    }, 160)
+    setUploadError('Sign in to save your highlight permanently.')
   }
 
   const submitComment = (event: FormEvent, id: string) => {
@@ -392,9 +460,7 @@ function App() {
       const result = await response.json()
       if (!response.ok) throw new Error(result.message ?? result.detail ?? 'Could not submit campus news.')
       publishedArticle = { ...submission, id: result.id, source: result.source, time: 'Just now', read: '3 min read' }
-    } else {
-      publishedArticle = { ...submission, id: `k-user-${Date.now()}`, source: 'Rakesh Kunibilli', time: 'Just now', read: '3 min read' }
-    }
+    } else throw new Error('Sign in to save your story permanently.')
     setOfficialCampusStories((current) => [publishedArticle, ...current])
     notify(`Published to KIET News · ${publishedArticle.category}.`)
   }
@@ -403,7 +469,8 @@ function App() {
     setGeneratorPhoto(file ?? null)
     setPhotoOcrStatus('')
     if (!file) return
-    if (!file.type.startsWith('image/')) {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setGeneratorPhoto(null)
       setPhotoOcrStatus('Choose an image file such as JPG, PNG or WebP.')
       return
     }
@@ -506,32 +573,21 @@ function App() {
   const publishGeneratedDraft = async () => {
     if (!requireAccount()) return
     if (!generated || !draftTitle.trim()) return notify('Generate and check the source before publishing.')
+    if (!generatorPhoto) return notify('Choose a photo before publishing this news story.')
     const sourceSummary = generatorInput.trim().match(/[^.!?]+[.!?]?/)?.[0].trim() ?? generatorInput.trim()
-    const generatedImage = generatorPhoto ? URL.createObjectURL(generatorPhoto) : photos.campus
-    const payload = { title: draftTitle.trim(), summary: sourceSummary.slice(0, 1000), body: draftBody, source: 'Rakesh Kunibilli', image: generatedImage, category: draftCategory }
+    const payload = { title: draftTitle.trim(), summary: sourceSummary.slice(0, 1000), body: draftBody, source: 'You', image: '', category: draftCategory }
     try {
-      let id = `n-user-${Date.now()}`
-      let publishedImage = generatedImage
-      if (authToken) {
-        const formData = new FormData()
-        formData.append('title', payload.title)
-        formData.append('summary', payload.summary)
-        formData.append('body', payload.body)
-        formData.append('source', payload.source)
-        formData.append('category', payload.category)
-        formData.append('coverUrl', photos.campus)
-        if (generatorPhoto) formData.append('photo', generatorPhoto)
-        const response = await fetch('/api/news', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${authToken}` },
-          body: formData,
-        })
-        const result = await response.json()
-        if (!response.ok) throw new Error(result.message ?? result.detail ?? 'Could not publish this draft.')
-        id = result.id
-        publishedImage = result.image
-      }
-      const story: Article = { ...payload, id, image: publishedImage, time: 'Just now', read: '4 min read' }
+      const formData = new FormData()
+      formData.append('title', payload.title)
+      formData.append('summary', payload.summary)
+      formData.append('body', payload.body)
+      formData.append('source', payload.source)
+      formData.append('category', payload.category)
+      formData.append('photo', generatorPhoto)
+      const response = await fetch('/api/news', { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: formData })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.message ?? result.detail ?? 'Could not publish this draft.')
+      const story: Article = { ...payload, ...result, time: 'Just now', read: '4 min read' }
       setDailyArticles((current) => [story, ...current])
       setPage('daily')
       notify(`Published to Daily News · ${draftCategory}.`)
@@ -590,33 +646,34 @@ function App() {
             <button className="top-search" onClick={() => navigate('search')}><Search size={16} /><span>Search stories</span><kbd>⌘ K</kbd></button>
             <label className="language-picker" aria-label="Choose language" title={translationStatus || 'Choose a language to translate news'}><Globe2 size={16} /><select value={language} onChange={(event) => setLanguage(event.target.value)}>{languages.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={13} /></label>
             <button className="icon-button notification-button" aria-label="Notifications" onClick={() => navigate('notifications')}><Bell size={18} /><i /></button>
-            {authToken ? <button className="session-label" onClick={() => navigate('profile')}><Shield size={14} />{roleLabels[role]}</button> : <div className="role-picker-wrap" title="Preview role-based demo views"><Shield size={14} /><select aria-label="Demo role" value={role} onChange={(event) => setRole(event.target.value as Role)}>{demoRoleEntries.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>}
+            {authToken ? <button className="session-label" onClick={() => navigate('profile')}><Shield size={14} />{roleLabels[role]}</button> : <><button className="session-label" onClick={() => { setAuthMode('login'); setAuthError('') }}>Sign in</button><button className="session-label" onClick={() => { setAuthMode('register'); setAuthError('') }}>Create account</button></>}
           </div>
         </header>
 
         <div className="page-wrap">
           {page !== 'home' && <div className="page-heading"><button className="back-link" onClick={back}><ArrowLeft size={16} /> Back</button><div className="page-heading-title"><h1>{pageTitles[page]}</h1><span className="heading-rule" /></div></div>}
-          {page === 'home' && <HomeView items={localizedArticles.filter((item) => item.id.startsWith('n'))} onNavigate={navigate} onOpenArticle={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
-          {page === 'daily' && <NewsView title="The stories shaping your day" subtitle="A considered briefing from India and around the world." items={localizedArticles.filter((item) => item.id.startsWith('n'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
+          {page === 'home' && <HomeView items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onNavigate={navigate} onOpenArticle={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
+          {page === 'daily' && <NewsView title="The stories shaping your day" subtitle="A considered briefing from India and around the world." items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
           {page === 'kiet' && <NewsView title="Life at KIET, as it happens" subtitle="Official updates, student stories and ideas from across campus." items={localizedArticles.filter((item) => item.id.startsWith('k'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} campus canSubmit={canPost} pendingSubmissions={campusPending} onJoin={() => { setAuthMode('register'); setAuthError('') }} onCampusSubmit={submitCampusDraft} />}
           {page === 'highlights' && <HighlightsView posts={highlights.filter((post) => post.status === 'published' || (post.status === 'pending' && post.name === 'Rakesh Kunibilli'))} canPost={canPost} onLike={toggleLike} onSave={toggleSave} onShare={share} onReport={() => notify(canPost ? 'Report sent to the moderation team.' : 'Sign in to report content.')} onFollow={(id) => { if (requireAccount()) setFollowed((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) }} liked={liked} followed={followed} uploadFile={uploadFile} onPick={handleUploadPick} caption={newCaption} setCaption={setNewCaption} onSubmit={submitHighlight} progress={uploadProgress} error={uploadError} comments={comments} commentTarget={commentTarget} setCommentTarget={setCommentTarget} commentDraft={commentDraft} setCommentDraft={setCommentDraft} onComment={submitComment} onJoin={() => { setAuthMode('register'); setAuthError('') }} />}
           {page === 'generator' && <div className="generator-page"><PhotoSourceInput fileName={generatorPhoto?.name ?? ''} status={photoOcrStatus} onPick={handleGeneratorPhoto} /><DraftCategorySelector category={draftCategory} setCategory={setDraftCategory} generated={generated} /><GeneratorView input={generatorInput} setInput={setGeneratorInput} generated={generated} title={draftTitle} setTitle={setDraftTitle} body={draftBody} setBody={setDraftBody} onGenerate={generateDraft} onSave={() => notify('Draft saved to your workspace.')} onPublish={publishGeneratedDraft} /></div>}
           {page === 'search' && <SearchView query={query} setQuery={setQuery} category={category} setCategory={setCategory} results={searchResults} onOpen={openArticle} />}
           {page === 'notifications' && <NotificationsView onOpen={() => navigate('highlights')} />}
-          {page === 'profile' && <ProfileView role={role} authenticated={Boolean(authToken)} onRoleChange={setRole} onSignOut={signOut} savedCount={saved.length} postCount={highlights.filter((post) => post.name === 'Rakesh Kunibilli').length} onNavigate={navigate} />}
+          {page === 'profile' && <ProfileView role={role} authenticated={Boolean(authToken)} onRoleChange={setRole} onSignOut={signOut} savedCount={saved.length} postCount={highlights.filter((post) => post.ownedByCurrentUser).length} onNavigate={navigate} />}
+          {page === 'profile' && Boolean(authToken) && <MyContentManager articles={[...dailyArticles, ...officialCampusStories].filter((item) => item.ownedByCurrentUser)} highlights={highlights.filter((post) => post.ownedByCurrentUser)} onDeleteArticle={deleteArticle} onDeleteHighlight={deleteHighlight} />}
           {page === 'admin' && isAdmin && <><AdminView role={role} activeTab={adminTab} setActiveTab={setAdminTab} pending={pendingPosts} onModerate={moderate} /><CampusReviewPanel posts={campusPending} onReview={moderateCampusNews} /></>}
           {page === 'article' && <ArticleView article={activeArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked.includes(activeArticle.id)} saved={saved.includes(activeArticle.id)} comments={comments[activeArticle.id] ?? []} draft={commentDraft} setDraft={setCommentDraft} onComment={(event) => submitComment(event, activeArticle.id)} canPost={canPost} />}
         </div>
         <footer className="footer"><span>KIET NEWS HUB</span><span>Independent voices. One campus.</span><span>Demo mode · 2026</span></footer>
       </main>
-      {authMode && <AuthDialog mode={authMode} setMode={setAuthMode} name={authName} setName={setAuthName} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} error={authError} busy={authBusy} onSubmit={submitAuth} onClose={() => setAuthMode(null)} onDemo={continueAsDemoStudent} />}
+      {authMode && <AuthDialog mode={authMode} setMode={setAuthMode} name={authName} setName={setAuthName} username={authUsername} setUsername={setAuthUsername} password={authPassword} setPassword={setAuthPassword} error={authError} busy={authBusy} onSubmit={submitAuth} onClose={() => setAuthMode(null)} onDemo={continueAsDemoStudent} />}
       {toast && <div className="toast"><Check size={16} />{toast}</div>}
     </div>
   )
 }
 
-function AuthDialog({ mode, setMode, name, setName, email, setEmail, password, setPassword, error, busy, onSubmit, onClose, onDemo }: { mode: 'register' | 'login'; setMode: (mode: 'register' | 'login') => void; name: string; setName: (value: string) => void; email: string; setEmail: (value: string) => void; password: string; setPassword: (value: string) => void; error: string; busy: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDemo: () => void }) {
-  return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button className="icon-button auth-close" aria-label="Close dialog" onClick={onClose}><X size={18} /></button><span className="auth-brand"><GraduationCap size={17} /> KIET NEWS HUB</span><h2 id="auth-title">{mode === 'register' ? 'Find your people.' : 'Welcome back.'}</h2><p>{mode === 'register' ? 'Create a student account to post, follow and join the campus conversation.' : 'Sign in to continue to your KIET community.'}</p><form onSubmit={onSubmit}>{mode === 'register' && <label className="form-label">Your name<input required minLength={2} maxLength={90} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Aanya Sharma" /></label>}<label className="form-label">Email address<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@kiet.edu" /></label><label className="form-label">Password<input required type="password" minLength={mode === 'register' ? 12 : 1} maxLength={128} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'register' ? 'At least 12 characters' : 'Your password'} /></label>{error && <p className="auth-error">{error}</p>}<button className="button-dark full-button" disabled={busy}>{busy ? 'Connecting…' : mode === 'register' ? 'Create student account' : 'Sign in'}<ArrowRight size={15} /></button></form><div className="auth-switch">{mode === 'register' ? 'Already a member?' : 'New to the community?'} <button onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>{mode === 'register' ? 'Sign in' : 'Create account'}</button></div><div className="auth-demo"><span>Just exploring?</span><button onClick={onDemo}>Continue with demo student</button></div><small className="auth-privacy">Accounts use protected authentication. Demo mode does not save changes after refresh.</small></section></div>
+function AuthDialog({ mode, setMode, name, setName, username, setUsername, password, setPassword, error, busy, onSubmit, onClose, onDemo }: { mode: 'register' | 'login'; setMode: (mode: 'register' | 'login') => void; name: string; setName: (value: string) => void; username: string; setUsername: (value: string) => void; password: string; setPassword: (value: string) => void; error: string; busy: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDemo: () => void }) {
+  return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button className="icon-button auth-close" aria-label="Close dialog" onClick={onClose}><X size={18} /></button><span className="auth-brand"><GraduationCap size={17} /> KIET NEWS HUB</span><h2 id="auth-title">{mode === 'register' ? 'Find your people.' : 'Welcome back.'}</h2><p>{mode === 'register' ? 'Create an account with a username to join the campus conversation.' : 'Sign in with your username to continue.'}</p><form onSubmit={onSubmit}>{mode === 'register' && <label className="form-label">Your name<input required minLength={2} maxLength={90} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Aanya Sharma" /></label>}<label className="form-label">Username<input required minLength={3} maxLength={30} pattern="[A-Za-z0-9._]+" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="your.username" /></label><label className="form-label">Password<input required type="password" minLength={mode === 'register' ? 12 : 1} maxLength={128} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'register' ? 'At least 12 characters' : 'Your password'} /></label>{error && <p className="auth-error">{error}</p>}<button className="button-dark full-button" disabled={busy}>{busy ? 'Connecting…' : mode === 'register' ? 'Create account' : 'Sign in'}<ArrowRight size={15} /></button></form><div className="auth-switch">{mode === 'register' ? 'Already a member?' : 'New to the community?'} <button onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>{mode === 'register' ? 'Sign in' : 'Create account'}</button></div><div className="auth-demo"><span>Just exploring?</span><button onClick={onDemo}>Continue as guest</button></div><small className="auth-privacy">Usernames must be 3–30 letters, numbers, dots or underscores.</small></section></div>
 }
 
 function NavButton({ label, icon: Icon, active, onClick, badge }: { label: string; icon: LucideIcon; active: boolean; onClick: () => void; badge?: string }) {
@@ -756,6 +813,10 @@ function NotificationsView({ onOpen }: { onOpen: () => void }) {
   return <><PageIntro eyebrow="YOUR INBOX" title="All caught up, almost">Updates from stories and people you follow.</PageIntro><div className="notification-list">{items.map(({ icon: Icon, title, body, time, fresh }) => <button className={`notification-row ${fresh ? 'notification-fresh' : ''}`} key={title} onClick={onOpen}><span className="notification-icon"><Icon size={18} /></span><span className="notification-copy"><strong>{title}</strong><small>{body}</small></span><time>{time}</time>{fresh && <i />}</button>)}</div></>
 }
 
+function MyContentManager({ articles, highlights, onDeleteArticle, onDeleteHighlight }: { articles: Article[]; highlights: Highlight[]; onDeleteArticle: (article: Article) => void; onDeleteHighlight: (post: Highlight) => void }) {
+  return <section className="my-content-manager"><div className="section-header"><h3>My content</h3><span>{articles.length + highlights.length} items</span></div>{articles.map((article) => <div className="my-content-row" key={article.id}><img src={article.image} alt="" /><span><strong>{article.title}</strong><small>{article.category} · News</small></span><button className="icon-button" aria-label={`Delete ${article.title}`} title="Delete story" onClick={() => onDeleteArticle(article)}><Trash2 size={16} /></button></div>)}{highlights.map((post) => <div className="my-content-row" key={post.id}><img src={post.image} alt="" /><span><strong>{post.caption}</strong><small>{post.type === 'video' ? 'Video highlight' : 'Photo highlight'}</small></span><button className="icon-button" aria-label={`Delete ${post.caption}`} title="Delete highlight" onClick={() => onDeleteHighlight(post)}><Trash2 size={16} /></button></div>)}{articles.length + highlights.length === 0 && <p className="my-content-empty">Your uploaded news and highlights will appear here.</p>}</section>
+}
+
 function ProfileView({ role, authenticated, onRoleChange, onSignOut, savedCount, postCount, onNavigate }: { role: Role; authenticated: boolean; onRoleChange: (role: Role) => void; onSignOut: () => void; savedCount: number; postCount: number; onNavigate: (page: Page) => void }) {
   if (authenticated) return <><div className="profile-cover" style={{ backgroundImage: `linear-gradient(90deg, rgba(20,48,36,.92), rgba(20,48,36,.12)), url(${photos.campus})` }}><span>PLATFORM CREATOR</span><h2>Stories from the KIET community.</h2></div><section className="profile-main"><div className="profile-id"><span className="avatar avatar-profile">RK</span><div><h2>Rakesh Kunibilli <span className="verified-mark"><Check size={12} /></span></h2><p>KIET News Hub creator · Account holder</p><span className="profile-role">{roleLabels[role]}</span></div><button className="button-outline profile-edit" onClick={onSignOut}><LogOut size={15} /> Sign out</button></div><p className="profile-bio">Creator and account holder for KIET News Hub.</p><div className="profile-stats"><div><strong>{postCount}</strong><span>Highlights</span></div><div><strong>{savedCount}</strong><span>Saved stories</span></div></div></section><div className="profile-settings"><button className="profile-link-row" onClick={() => onNavigate('highlights')}><span><Compass size={18} /><strong>Campus highlights</strong></span><ArrowRight size={16} /></button><button className="profile-link-row" onClick={() => onNavigate('search')}><span><Bookmark size={18} /><strong>Saved stories</strong></span><ArrowRight size={16} /></button></div></>
   if (!authenticated) return <><div className="profile-cover" style={{ backgroundImage: `linear-gradient(90deg, rgba(20,48,36,.92), rgba(20,48,36,.12)), url(${photos.campus})` }}><span>PLATFORM CREATOR</span><h2>Stories from the KIET community.</h2></div><section className="profile-main"><div className="profile-id"><span className="avatar avatar-profile">RK</span><div><h2>Rakesh Kunibilli <span className="verified-mark"><Check size={12} /></span></h2><p>KIET News Hub creator · Account holder</p><span className="profile-role">Demo · {roleLabels[role]}</span></div></div><p className="profile-bio">Creator and account holder for KIET News Hub.</p><div className="profile-stats"><div><strong>{postCount}</strong><span>Highlights</span></div><div><strong>{savedCount}</strong><span>Saved stories</span></div></div></section><div className="profile-settings"><section><span className="eyebrow">DEMO ACCOUNT</span><h3>Explore demo permissions</h3><p>Super Admin access is reserved for the configured platform owner.</p><div className="role-cards">{demoRoleEntries.map(([value, label]) => <button key={value} className={role === value ? 'role-card selected-role' : 'role-card'} onClick={() => onRoleChange(value as Role)}><span>{value === 'guest' ? <Eye size={17} /> : value === 'student' ? <Users size={17} /> : value === 'editor' ? <FileText size={17} /> : <Shield size={17} />}</span><strong>{label}</strong>{role === value && <Check size={15} />}</button>)}</div></section><button className="profile-link-row" onClick={() => onNavigate('highlights')}><span><Compass size={18} /><strong>Campus highlights</strong></span><ArrowRight size={16} /></button><button className="profile-link-row" onClick={() => onNavigate('search')}><span><Bookmark size={18} /><strong>Saved stories</strong></span><ArrowRight size={16} /></button></div></>
@@ -776,7 +837,7 @@ function CampusReviewPanel({ posts, onReview }: { posts: Article[]; onReview: (a
 }
 
 function ArticleView({ article, onLike, onSave, onShare, liked, saved, comments, draft, setDraft, onComment, canPost }: { article: Article; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (title: string) => void; liked: boolean; saved: boolean; comments: string[]; draft: string; setDraft: (text: string) => void; onComment: (event: FormEvent) => void; canPost: boolean }) {
-  return <article className="article-detail"><div className="article-meta"><span>{article.category.toUpperCase()}</span><i>·</i><span>{article.source}</span><i>·</i><span>{article.time}</span></div><h1>{article.title}</h1><p className="article-deck">{article.summary}</p><div className="article-byline"><span className="avatar avatar-author">{article.source.slice(0, 2).toUpperCase()}</span><span><strong>{article.source}</strong><small>News desk · KIET News Hub</small></span><div className="article-actions"><ActionButton icon={Heart} label="Like story" active={liked} onClick={() => onLike(article.id)} /><ActionButton icon={Bookmark} label="Save story" active={saved} onClick={() => onSave(article.id)} /><ActionButton icon={Share2} label="Share story" onClick={() => onShare(article.title)} /></div></div><img className="article-cover" src={article.image} alt="" /><div className="article-body"><p className="article-opening">{article.summary}</p><p>Across the region, the pace of change is creating new opportunities for students, local organisations and the people building what comes next. The story is less about one big moment and more about the thoughtful work happening every day.</p><p>For the community involved, the next step is turning early momentum into something lasting. More details will follow as organisers and participants share their plans.</p><div className="fact-check-note"><Shield size={17} /><span><strong>Editorial note</strong><br />This is sample demo coverage created for the KIET News Hub preview.</span></div><div className="article-tags"><span>{article.category}</span><span>KIET News Hub</span><span>Community</span></div><div className="article-comments"><div className="section-header"><h3>Join the conversation</h3><span>{comments.length} comments</span></div>{comments.map((comment, index) => <p className="article-comment" key={index}><span className="avatar avatar-small">AS</span><span><strong>Aanya Sharma</strong><br />{comment}<small>Just now · Reply</small></span></p>)}<form className="article-comment-form" onSubmit={onComment}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={canPost ? 'Add a thoughtful comment...' : 'Sign in to comment'} /><button className="button-dark" disabled={!canPost}><Send size={15} /> Comment</button></form></div></div></article>
+  return <article className="article-detail"><div className="article-meta"><span>{article.category.toUpperCase()}</span><i>·</i><span>{article.source}</span><i>·</i><span>{article.time}</span></div><h1>{article.title}</h1><p className="article-deck">{article.summary}</p><div className="article-byline"><span className="avatar avatar-author">{article.source.slice(0, 2).toUpperCase()}</span><span><strong>{article.source}</strong><small>News desk · KIET News Hub</small></span><div className="article-actions"><ActionButton icon={Heart} label="Like story" active={liked} onClick={() => onLike(article.id)} /><ActionButton icon={Bookmark} label="Save story" active={saved} onClick={() => onSave(article.id)} /><ActionButton icon={Share2} label="Share story" onClick={() => onShare(article.title)} /></div></div><img className="article-cover" src={article.image} alt="" /><div className="article-body">{article.body ? article.body.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p className={index === 0 ? 'article-opening' : undefined} key={index}>{paragraph}</p>) : <p className="article-opening">{article.summary}</p>}<div className="article-tags"><span>{article.category}</span><span>KIET News Hub</span></div><div className="article-comments"><div className="section-header"><h3>Join the conversation</h3><span>{comments.length} comments</span></div>{comments.map((comment, index) => <p className="article-comment" key={index}><span className="avatar avatar-small">AS</span><span><strong>Aanya Sharma</strong><br />{comment}<small>Just now · Reply</small></span></p>)}<form className="article-comment-form" onSubmit={onComment}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={canPost ? 'Add a thoughtful comment...' : 'Sign in to comment'} /><button className="button-dark" disabled={!canPost}><Send size={15} /> Comment</button></form></div></div></article>
 }
 
 function EmptyState({ icon: Icon, title, body }: { icon: LucideIcon; title: string; body: string }) {

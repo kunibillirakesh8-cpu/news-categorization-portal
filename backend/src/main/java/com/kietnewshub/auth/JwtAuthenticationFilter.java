@@ -28,11 +28,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (header != null && header.startsWith("Bearer ")) {
             try {
                 Claims claims = jwtService.parse(header.substring(7));
-                HubUser user = users.findByEmailIgnoreCase(claims.getSubject())
+                HubUser user = users.findByUsernameIgnoreCase(claims.getSubject())
+                    .or(() -> users.findByEmailIgnoreCase(claims.getSubject()))
                     .filter(candidate -> !candidate.isSuspended())
                     .orElseThrow();
                 var authentication = new UsernamePasswordAuthenticationToken(
-                    user.getEmail(), null, List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name())));
+                    user.getUsername(), null, List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name())));
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             } catch (RuntimeException exception) {
                 SecurityContextHolder.clearContext();

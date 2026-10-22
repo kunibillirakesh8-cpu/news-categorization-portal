@@ -11,6 +11,9 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -31,9 +34,9 @@ public class CampusNewsController {
     }
 
     @GetMapping
-    public List<CampusNewsStory> published() {
+    public List<CampusNewsStory> published(Authentication authentication) {
         return submissions.findByStatusOrderByCreatedAtDesc(CampusNewsStatus.PUBLISHED).stream()
-                .map(CampusNewsStory::from).toList();
+                .map(item -> CampusNewsStory.from(item, authentication)).toList();
     }
 
     @PostMapping({"", "/submissions"})
@@ -46,20 +49,30 @@ public class CampusNewsController {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image must use a public HTTPS URL.");
             }
         }
-        var user = users.findByEmailIgnoreCase(authentication.getName())
+        var user = users.findByUsernameIgnoreCase(authentication.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
         var submission = new CampusNewsSubmission(user, request.title().trim(), request.summary().trim(), request.category(), request.image());
         submission.setStatus(CampusNewsStatus.PUBLISHED);
         submission = submissions.save(submission);
-        return CampusNewsStory.from(submission);
+        return CampusNewsStory.from(submission, authentication);
     }
 
     @GetMapping("/mine")
     @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
     public List<CampusNewsStory> mySubmissions(Authentication authentication) {
         return submissions.findAll().stream()
-                .filter(item -> item.getAuthor().getEmail().equalsIgnoreCase(authentication.getName()))
-                .map(CampusNewsStory::from).toList();
+                .filter(item -> item.getAuthor().getUsername().equalsIgnoreCase(authentication.getName()))
+                .map(item -> CampusNewsStory.from(item, authentication)).toList();
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
+    public void delete(@PathVariable String id, Authentication authentication) {
+        if (!id.matches("k-user-\\d+")) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        long databaseId = Long.parseLong(id.substring("k-user-".length()));
+        CampusNewsSubmission submission = submissions.findByIdAndAuthorUsernameIgnoreCase(databaseId, authentication.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        submissions.delete(submission);
     }
 
     public record CampusNewsRequest(@NotBlank @Size(max = 180) String title,
@@ -67,10 +80,11 @@ public class CampusNewsController {
                                    @NotBlank String category,
                                    @Size(max = 1000) String image) {}
     public record CampusNewsStory(String id, String title, String summary, String category, String source,
-                                  String image, String status, Instant publishedAt) {
-        public static CampusNewsStory from(CampusNewsSubmission item) {
+                                  String image, String status, Instant publishedAt, boolean ownedByCurrentUser) {
+        public static CampusNewsStory from(CampusNewsSubmission item, Authentication authentication) {
+            boolean owner = authentication != null && item.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
             return new CampusNewsStory("k-user-" + item.getId(), item.getTitle(), item.getSummary(), item.getCategory(),
-                    item.getAuthor().getDisplayName(), item.getImage(), item.getStatus().name(), item.getCreatedAt());
+                    item.getAuthor().getDisplayName(), item.getImage(), item.getStatus().name(), item.getCreatedAt(), owner);
         }
     }
 }

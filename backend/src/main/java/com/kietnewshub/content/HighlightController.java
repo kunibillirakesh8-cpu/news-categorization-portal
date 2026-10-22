@@ -11,8 +11,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -20,6 +20,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -39,41 +41,48 @@ public class HighlightController {
     private static final Set<String> VIDEO_TYPES = Set.of("video/mp4", "video/webm", "video/quicktime");
 
     private final HighlightRepository highlights;
+    private final HighlightMediaRepository mediaFiles;
     private final HubUserRepository users;
     private final Path uploadDirectory;
 
-    public HighlightController(HighlightRepository highlights, HubUserRepository users,
+    public HighlightController(HighlightRepository highlights, HighlightMediaRepository mediaFiles, HubUserRepository users,
                                @Value("${hub.storage.local-directory:./uploads}") String uploadDirectory) {
         this.highlights = highlights;
+        this.mediaFiles = mediaFiles;
         this.users = users;
         this.uploadDirectory = Path.of(uploadDirectory).toAbsolutePath().normalize();
     }
 
     @GetMapping
-    public List<HighlightResponse> published() {
+    public List<HighlightResponse> published(Authentication authentication) {
         return highlights.findByStatusOrderByCreatedAtDesc(HighlightStatus.PUBLISHED).stream()
-                .map(HighlightResponse::from).toList();
+                .map(post -> HighlightResponse.from(post, authentication)).toList();
     }
 
         @GetMapping("/{id}/media")
         public ResponseEntity<Resource> media(@PathVariable Long id, Authentication authentication) {
         CampusHighlight post = highlights.findById(id)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        boolean owner = authentication != null && post.getAuthor().getEmail().equalsIgnoreCase(authentication.getName());
+        boolean owner = authentication != null && post.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
         boolean moderator = authentication != null && authentication.getAuthorities().stream().anyMatch(authority ->
             Set.of("ROLE_EDITOR", "ROLE_ADMIN", "ROLE_SUPER_ADMIN").contains(authority.getAuthority()));
         if (post.getStatus() != HighlightStatus.PUBLISHED && !owner && !moderator) {
             throw new ResponseStatusException(authentication == null ? HttpStatus.UNAUTHORIZED : HttpStatus.FORBIDDEN);
         }
-        Resource resource = new FileSystemResource(post.getMediaPath());
+        var media = mediaFiles.findById(id);
+        Resource resource = media
+            .<Resource>map(media -> new ByteArrayResource(media.getData()))
+            .orElseGet(() -> new FileSystemResource(post.getMediaPath()));
+        String mediaType = media.map(HighlightMedia::getContentType).orElse(post.getMediaType());
         return ResponseEntity.ok()
-            .contentType(MediaType.parseMediaType(post.getMediaType()))
+            .contentType(MediaType.parseMediaType(mediaType))
             .header("X-Content-Type-Options", "nosniff")
             .body(resource);
         }
 
     @PostMapping(consumes = "multipart/form-data")
     @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
+    @Transactional
     public HighlightResponse submit(@RequestParam("media") MultipartFile media,
                                     @RequestParam("caption") @NotBlank @Size(max = 500) String caption,
                                     Authentication authentication) throws IOException {
@@ -90,18 +99,35 @@ public class HighlightController {
             }
         }
 
-        HubUser author = users.findByEmailIgnoreCase(authentication.getName())
+        HubUser author = users.findByUsernameIgnoreCase(authentication.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
 
-        Files.createDirectories(uploadDirectory);
-        String extension = extensionFor(contentType);
-        Path target = uploadDirectory.resolve(UUID.randomUUID() + extension).normalize();
-        if (!target.startsWith(uploadDirectory)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid media path.");
-        media.transferTo(target);
-        CampusHighlight post = new CampusHighlight(author, caption.trim(), target.toString(), contentType);
+        if (media.getSize() > VIDEO_LIMIT_BYTES) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Media file exceeds the 300 MB upload limit.");
+        CampusHighlight post = new CampusHighlight(author, caption.trim(), "", contentType);
         post.setStatus(HighlightStatus.PUBLISHED);
         post = highlights.save(post);
-        return HighlightResponse.from(post);
+        mediaFiles.save(new HighlightMedia(post.getId(), contentType, media.getBytes()));
+        return HighlightResponse.from(post, authentication);
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
+    @Transactional
+    public void delete(@PathVariable Long id, Authentication authentication) {
+        CampusHighlight post = highlights.findByIdAndAuthorUsernameIgnoreCase(id, authentication.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        mediaFiles.deleteById(id);
+        if (post.getMediaPath() != null && !post.getMediaPath().isBlank()) {
+            Path legacyPath = Path.of(post.getMediaPath()).toAbsolutePath().normalize();
+            if (legacyPath.startsWith(uploadDirectory)) {
+                try {
+                    Files.deleteIfExists(legacyPath);
+                } catch (IOException error) {
+                    throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not remove the uploaded media.");
+                }
+            }
+        }
+        highlights.delete(post);
     }
 
     @PutMapping("/{id}")
@@ -110,7 +136,7 @@ public class HighlightController {
                                   Authentication authentication) {
         CampusHighlight post = highlights.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        boolean owner = post.getAuthor().getEmail().equalsIgnoreCase(authentication.getName());
+        boolean owner = post.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
         boolean moderator = authentication.getAuthorities().stream().anyMatch(authority ->
                 Set.of("ROLE_EDITOR", "ROLE_ADMIN", "ROLE_SUPER_ADMIN").contains(authority.getAuthority()));
         if (!owner && !moderator) throw new ResponseStatusException(HttpStatus.FORBIDDEN);
@@ -152,10 +178,12 @@ public class HighlightController {
 
     public record EditHighlightRequest(@NotBlank @Size(max = 500) String caption) {}
     public record HighlightResponse(Long id, String author, String caption, String mediaUrl, String mediaType,
-                                    HighlightStatus status, boolean featured, java.time.Instant createdAt) {
-        static HighlightResponse from(CampusHighlight post) {
+                                    HighlightStatus status, boolean featured, java.time.Instant createdAt,
+                                    boolean ownedByCurrentUser) {
+        static HighlightResponse from(CampusHighlight post, Authentication authentication) {
+            boolean owner = authentication != null && post.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
             return new HighlightResponse(post.getId(), post.getAuthor().getDisplayName(), post.getCaption(), "/api/highlights/" + post.getId() + "/media",
-                    post.getMediaType(), post.getStatus(), post.isFeatured(), post.getCreatedAt());
+                    post.getMediaType(), post.getStatus(), post.isFeatured(), post.getCreatedAt(), owner);
         }
     }
 }

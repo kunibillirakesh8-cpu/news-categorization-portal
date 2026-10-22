@@ -387,6 +387,14 @@ kbd { padding: 2px 4px; border: 1px solid #e3e7e3; border-radius: 3px; color: #8
 .profile-link-row { width: 100%; display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 13px 14px; border: 1px solid #e6ebe6; border-radius: 4px; color: #617168; background: #fff; }
 .profile-link-row > span { display: flex; align-items: center; gap: 10px; }
 .profile-link-row strong { font-size: 10px; }
+.my-content-manager { max-width: 850px; padding: 0 0 22px; }
+.my-content-manager > .section-header { margin-bottom: 8px; }
+.my-content-row { min-height: 62px; display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 7px 10px; border-bottom: 1px solid #e6ebe6; background: #fff; }
+.my-content-row > img { width: 52px; height: 42px; border-radius: 3px; object-fit: cover; }
+.my-content-row > span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.my-content-row strong { overflow: hidden; color: #39483e; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.my-content-row small, .my-content-empty { color: #828d84; font-size: 9px; }
+.my-content-empty { margin: 0; padding: 14px 0; }
 
 .admin-tabs { display: flex; gap: 19px; margin: -1px 0 17px; overflow-x: auto; border-bottom: 1px solid var(--line); }
 .admin-tabs button { min-height: 35px; position: relative; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 0 1px; border: 0; color: #879188; background: transparent; font-size: 9px; }

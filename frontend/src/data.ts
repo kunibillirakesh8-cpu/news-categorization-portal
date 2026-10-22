@@ -8,6 +8,8 @@ export type Article = {
   image: string
   read: string
   featured?: boolean
+  body?: string
+  ownedByCurrentUser?: boolean
 }
 
 export type Highlight = {
@@ -22,6 +24,7 @@ export type Highlight = {
   time: string
   type: 'photo' | 'video'
   status: 'published' | 'pending' | 'rejected'
+  ownedByCurrentUser?: boolean
 }
 
 export const photos = {

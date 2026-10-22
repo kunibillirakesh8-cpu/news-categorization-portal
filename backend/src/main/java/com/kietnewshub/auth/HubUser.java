@@ -17,7 +17,10 @@ public class HubUser {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true, length = 254)
+    @Column(unique = true, length = 30)
+    private String username;
+
+    @Column(unique = true, length = 254)
     private String email;
 
     @Column(nullable = false, length = 90)
@@ -38,18 +41,21 @@ public class HubUser {
 
     protected HubUser() {}
 
-    public HubUser(String email, String displayName, String passwordHash) {
-        this.email = email;
+    public HubUser(String username, String displayName, String passwordHash) {
+        this.username = username;
+        this.email = username + "@users.invalid";
         this.displayName = displayName;
         this.passwordHash = passwordHash;
     }
 
     public Long getId() { return id; }
+    public String getUsername() { return username; }
     public String getEmail() { return email; }
     public String getDisplayName() { return displayName; }
     public String getPasswordHash() { return passwordHash; }
     public Role getRole() { return role; }
     public boolean isSuspended() { return suspended; }
     public void setRole(Role role) { this.role = role; }
+    public void setUsername(String username) { this.username = username; }
     public void setSuspended(boolean suspended) { this.suspended = suspended; }
 }

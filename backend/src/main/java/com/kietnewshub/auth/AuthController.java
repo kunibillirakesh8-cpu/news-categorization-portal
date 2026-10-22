@@ -1,10 +1,9 @@
 package com.kietnewshub.auth;
 
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
-import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,17 +27,17 @@ public class AuthController {
 
     @PostMapping("/register")
     public AuthResponse register(@Valid @RequestBody RegisterRequest request) {
-        if (users.existsByEmailIgnoreCase(request.email())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "An account with this email already exists.");
+        String username = request.username().trim().toLowerCase(java.util.Locale.ROOT);
+        if (users.existsByUsernameIgnoreCase(username)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "That username is already taken.");
         }
-        HubUser user = users.save(new HubUser(
-                request.email().trim().toLowerCase(), request.displayName().trim(), passwordEncoder.encode(request.password())));
+        HubUser user = users.save(new HubUser(username, request.displayName().trim(), passwordEncoder.encode(request.password())));
         return response(user);
     }
 
     @PostMapping("/login")
     public AuthResponse login(@Valid @RequestBody LoginRequest request) {
-        HubUser user = users.findByEmailIgnoreCase(request.email().trim())
+        HubUser user = users.findByUsernameIgnoreCase(request.username().trim())
                 .filter(candidate -> passwordEncoder.matches(request.password(), candidate.getPasswordHash()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or password."));
         if (user.isSuspended()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This account is suspended.");
@@ -46,11 +45,12 @@ public class AuthController {
     }
 
     private AuthResponse response(HubUser user) {
-        return new AuthResponse(jwtService.issue(user), user.getId(), user.getDisplayName(), user.getRole().name());
+        return new AuthResponse(jwtService.issue(user), user.getId(), user.getUsername(), user.getDisplayName(), user.getRole().name());
     }
 
-    public record RegisterRequest(@Email @NotBlank String email, @NotBlank @Size(min = 2, max = 90) String displayName,
+    public record RegisterRequest(@NotBlank @Pattern(regexp = "[A-Za-z0-9._]{3,30}") String username,
+                                  @NotBlank @Size(min = 2, max = 90) String displayName,
                                   @NotBlank @Size(min = 12, max = 128) String password) {}
-    public record LoginRequest(@Email @NotBlank String email, @NotBlank String password) {}
-    public record AuthResponse(String accessToken, Long userId, String displayName, String role) {}
+    public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
+    public record AuthResponse(String accessToken, Long userId, String username, String displayName, String role) {}
 }

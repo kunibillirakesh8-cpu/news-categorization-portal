@@ -25,7 +25,7 @@ public class JwtService {
     public String issue(HubUser user) {
         Instant now = Instant.now();
         return Jwts.builder()
-                .subject(user.getEmail())
+                .subject(user.getUsername())
                 .claim("role", user.getRole().name())
                 .claim("userId", user.getId())
                 .issuedAt(Date.from(now))
