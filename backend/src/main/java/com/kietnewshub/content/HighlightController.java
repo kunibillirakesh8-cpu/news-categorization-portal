@@ -37,7 +37,7 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/highlights")
 public class HighlightController {
     private static final long VIDEO_LIMIT_BYTES = 300L * 1024 * 1024;
-    private static final Set<String> IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/webp");
+    private static final Set<String> IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/webp", "image/jpg", "image/pjpeg", "image/x-png");
     private static final Set<String> VIDEO_TYPES = Set.of("video/mp4", "video/webm", "video/quicktime");
 
     private final HighlightRepository highlights;
@@ -59,8 +59,8 @@ public class HighlightController {
                 .map(post -> HighlightResponse.from(post, authentication)).toList();
     }
 
-        @GetMapping("/{id}/media")
-        public ResponseEntity<Resource> media(@PathVariable Long id, Authentication authentication) {
+    @GetMapping("/{id}/media")
+    public ResponseEntity<Resource> media(@PathVariable Long id, Authentication authentication) {
         CampusHighlight post = highlights.findById(id)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         boolean owner = authentication != null && post.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
@@ -77,8 +77,9 @@ public class HighlightController {
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType(mediaType))
             .header("X-Content-Type-Options", "nosniff")
+            .header("Cache-Control", "public, max-age=86400")
             .body(resource);
-        }
+    }
 
     @PostMapping(consumes = "multipart/form-data")
     @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
@@ -91,14 +92,15 @@ public class HighlightController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Caption must contain readable text.");
         }
         if (media.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Media file is required.");
-        String contentType = media.getContentType();
-        boolean video = contentType != null && VIDEO_TYPES.contains(contentType.toLowerCase());
-        boolean image = contentType != null && IMAGE_TYPES.contains(contentType.toLowerCase());
+        String contentType = resolveContentType(media);
+        boolean video = VIDEO_TYPES.contains(contentType);
+        boolean image = IMAGE_TYPES.contains(contentType);
         if (!video && !image) throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Supported formats: JPG, PNG, WebP, MP4, WebM and MOV.");
         if (video && media.getSize() > VIDEO_LIMIT_BYTES) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Videos must be 300 MB or smaller.");
         if (media.getSize() > VIDEO_LIMIT_BYTES) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Media file exceeds the 300 MB upload limit.");
         try (InputStream stream = media.getInputStream()) {
-            if (!matchesSignature(contentType, stream.readNBytes(16))) {
+            byte[] header = stream.readNBytes(64);
+            if (!matchesSignature(contentType, header)) {
                 throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "The file contents do not match the selected media type.");
             }
         }
@@ -161,10 +163,28 @@ public class HighlightController {
         return cleaned.length() > 500 ? cleaned.substring(0, 500).trim() : cleaned;
     }
 
+    static String resolveContentType(MultipartFile media) {
+        String ct = media.getContentType();
+        if (ct != null && !ct.isBlank() && !"application/octet-stream".equalsIgnoreCase(ct)) {
+            return ct.toLowerCase();
+        }
+        String filename = media.getOriginalFilename();
+        if (filename != null) {
+            String lower = filename.toLowerCase();
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".jfif")) return "image/jpeg";
+            if (lower.endsWith(".png")) return "image/png";
+            if (lower.endsWith(".webp")) return "image/webp";
+            if (lower.endsWith(".mp4")) return "video/mp4";
+            if (lower.endsWith(".webm")) return "video/webm";
+            if (lower.endsWith(".mov")) return "video/quicktime";
+        }
+        return ct != null ? ct.toLowerCase() : "";
+    }
+
     private String extensionFor(String contentType) {
         return switch (contentType.toLowerCase()) {
-            case "image/jpeg" -> ".jpg";
-            case "image/png" -> ".png";
+            case "image/jpeg", "image/jpg", "image/pjpeg" -> ".jpg";
+            case "image/png", "image/x-png" -> ".png";
             case "image/webp" -> ".webp";
             case "video/mp4" -> ".mp4";
             case "video/webm" -> ".webm";
@@ -174,19 +194,22 @@ public class HighlightController {
     }
 
     private boolean matchesSignature(String contentType, byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return false;
+        String asciiStr = ascii(bytes, 0, bytes.length);
         return switch (contentType.toLowerCase()) {
-            case "image/jpeg" -> bytes.length >= 3 && (bytes[0] & 0xff) == 0xff && (bytes[1] & 0xff) == 0xd8 && (bytes[2] & 0xff) == 0xff;
-            case "image/png" -> bytes.length >= 8 && (bytes[0] & 0xff) == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47;
+            case "image/jpeg", "image/jpg", "image/pjpeg" -> bytes.length >= 3 && (bytes[0] & 0xff) == 0xff && (bytes[1] & 0xff) == 0xd8 && (bytes[2] & 0xff) == 0xff;
+            case "image/png", "image/x-png" -> bytes.length >= 8 && (bytes[0] & 0xff) == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47;
             case "image/webp" -> bytes.length >= 12 && ascii(bytes, 0, 4).equals("RIFF") && ascii(bytes, 8, 4).equals("WEBP");
-            case "video/mp4" -> bytes.length >= 8 && ascii(bytes, 4, 4).equals("ftyp");
-            case "video/quicktime" -> bytes.length >= 12 && ascii(bytes, 4, 4).equals("ftyp") && ascii(bytes, 8, 4).startsWith("qt");
+            case "video/mp4" -> asciiStr.contains("ftyp") || (bytes.length >= 8 && ascii(bytes, 4, 4).equals("ftyp"));
+            case "video/quicktime" -> asciiStr.contains("ftyp") || asciiStr.contains("moov") || asciiStr.contains("wide") || asciiStr.contains("mdat");
             case "video/webm" -> bytes.length >= 4 && (bytes[0] & 0xff) == 0x1a && (bytes[1] & 0xff) == 0x45 && (bytes[2] & 0xff) == 0xdf && (bytes[3] & 0xff) == 0xa3;
             default -> false;
         };
     }
 
     private String ascii(byte[] bytes, int offset, int length) {
-        return new String(bytes, offset, length, java.nio.charset.StandardCharsets.US_ASCII);
+        int actualLen = Math.min(length, Math.max(0, bytes.length - offset));
+        return new String(bytes, offset, actualLen, java.nio.charset.StandardCharsets.US_ASCII);
     }
 
     public record EditHighlightRequest(@NotBlank @Size(max = 500) String caption) {}

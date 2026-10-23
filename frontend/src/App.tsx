@@ -38,6 +38,8 @@ const sanitizeHighlightCaption = (value: string) => value
   .trim()
   .slice(0, 500)
 
+const getInitials = (name?: string) => (name || 'Member').trim().split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 2).toUpperCase() || 'M'
+
 function App() {
   const [page, setPage] = useState<Page>('home')
   const [previousPage, setPreviousPage] = useState<Page>('home')
@@ -231,7 +233,7 @@ function App() {
     }
   }, [dailyArticles, highlights, officialCampusStories])
 
-  const canPost = Boolean(authToken)
+  const canPost = Boolean(authToken) || role !== 'guest'
   const isAdmin = Boolean(authToken) && ['admin', 'super-admin'].includes(role)
   const pendingPosts = highlights.filter((post) => post.status === 'pending')
   const currentDisplayName = accountName || accountUsername || 'Member'
@@ -399,35 +401,45 @@ function App() {
     setUploadError('')
     setUploadFile(null)
     if (!file) return
-    const imageOk = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
-    const videoOk = ['video/mp4', 'video/webm', 'video/quicktime'].includes(file.type)
-    if (!imageOk && !videoOk) return setUploadError('Choose a JPG, PNG, WebP, MP4, WebM or MOV file.')
-    if (videoOk && file.size > 300 * 1024 * 1024) return setUploadError('Videos must be 300 MB or smaller.')
+    const validImageExtensions = /\.(jpe?g|png|webp|jfif|pjpeg)$/i
+    const validVideoExtensions = /\.(mp4|webm|mov)$/i
+    const isImage = file.type.startsWith('image/') || validImageExtensions.test(file.name)
+    const isVideo = file.type.startsWith('video/') || validVideoExtensions.test(file.name)
+    if (!isImage && !isVideo) return setUploadError('Choose a JPG, PNG, WebP, MP4, WebM or MOV file.')
+    if (file.size > 300 * 1024 * 1024) return setUploadError('File must be 300 MB or smaller.')
     setUploadFile(file)
   }
 
   const submitHighlight = (event: FormEvent) => {
     event.preventDefault()
-    if (!requireAccount()) return
     if (!uploadFile) return setUploadError('Add a photo or video before submitting.')
     const caption = sanitizeHighlightCaption(newCaption)
     if (!caption) return setUploadError('Add a valid caption for your post.')
     const file = uploadFile
+    const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(file.name)
+    const previewUrl = URL.createObjectURL(file)
+
     const finishUpload = (id: string, mediaUrl?: string) => {
-      const isVideo = file.type.startsWith('video/')
-        setHighlights((current) => [{
-        id, name: accountName || 'Member', handle: `@${(accountName || 'member').toLowerCase().replace(/[^a-z0-9]+/g, '.')}`, caption,
-        image: isVideo ? photos.event : mediaUrl || photos.campus, likes: 0,
-        mediaUrl: isVideo ? mediaUrl : undefined,
-        publishedMediaUrl: mediaUrl,
-        time: 'Just now', type: isVideo ? 'video' : 'photo', status: 'published',
+      setHighlights((current) => [{
+        id,
+        name: accountName || (authToken ? 'Member' : 'Student Member'),
+        handle: `@${(accountUsername || accountName || 'member').toLowerCase().replace(/[^a-z0-9]+/g, '.')}`,
+        caption,
+        image: isVideo ? photos.event : (mediaUrl || previewUrl),
+        likes: 0,
+        mediaUrl: isVideo ? (mediaUrl || previewUrl) : undefined,
+        publishedMediaUrl: mediaUrl || previewUrl,
+        time: 'Just now',
+        type: isVideo ? 'video' : 'photo',
+        status: 'published',
         ownedByCurrentUser: true,
       }, ...current])
       setNewCaption('')
       setUploadFile(null)
       setUploadProgress(0)
-      notify('Published to KIET Highlights.')
+      notify(authToken ? 'Published to KIET Highlights.' : 'Published to KIET Highlights (demo mode).')
     }
+
     if (authToken) {
       const request = new XMLHttpRequest()
       request.open('POST', '/api/highlights')
@@ -436,13 +448,18 @@ function App() {
         if (progressEvent.lengthComputable) setUploadProgress(Math.round((progressEvent.loaded / progressEvent.total) * 100))
       }
       request.onload = () => {
-        const result = JSON.parse(request.responseText || '{}')
+        let result: { id?: number | string; mediaUrl?: string; message?: string; detail?: string } = {}
+        try {
+          result = JSON.parse(request.responseText || '{}')
+        } catch {
+          // Response is non-JSON
+        }
         if (request.status < 200 || request.status >= 300) {
-          setUploadError(result.message ?? result.detail ?? 'Upload failed. Please try again.')
+          setUploadError(result.message ?? result.detail ?? `Upload failed (${request.status}). Please try again.`)
           setUploadProgress(0)
           return
         }
-        finishUpload(String(result.id), result.mediaUrl)
+        finishUpload(String(result.id ?? Date.now()), result.mediaUrl)
       }
       request.onerror = () => {
         setUploadError('The API could not save your upload. Please try again.')
@@ -454,7 +471,9 @@ function App() {
       request.send(formData)
       return
     }
-    setUploadError('Sign in to save your highlight permanently.')
+
+    // Demo mode: publish to local in-memory feed immediately
+    finishUpload(`demo-${Date.now()}`, previewUrl)
   }
 
   const submitComment = (event: FormEvent, id: string) => {
@@ -670,10 +689,10 @@ function App() {
 
         <div className="page-wrap">
           {page !== 'home' && <div className="page-heading"><button className="back-link" onClick={back}><ArrowLeft size={16} /> Back</button><div className="page-heading-title"><h1>{pageTitles[page]}</h1><span className="heading-rule" /></div></div>}
-          {page === 'home' && <HomeView items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onNavigate={navigate} onOpenArticle={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} greetingName={currentGreetingName} />}
+          {page === 'home' && <HomeView items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} highlights={highlights} onNavigate={navigate} onOpenArticle={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} greetingName={currentGreetingName} />}
           {page === 'daily' && <NewsView title="The stories shaping your day" subtitle="A considered briefing from India and around the world." items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
           {page === 'kiet' && <NewsView title="Life at KIET, as it happens" subtitle="Official updates, student stories and ideas from across campus." items={localizedArticles.filter((item) => item.id.startsWith('k'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} campus canSubmit={canPost} pendingSubmissions={campusPending} onJoin={() => { setAuthMode('register'); setAuthError('') }} onCampusSubmit={submitCampusDraft} />}
-          {page === 'highlights' && <HighlightsView posts={highlights.filter((post) => post.status === 'published' || (post.status === 'pending' && post.name === currentDisplayName))} canPost={canPost} onLike={toggleLike} onSave={toggleSave} onShare={share} onReport={() => notify(canPost ? 'Report sent to the moderation team.' : 'Sign in to report content.')} onFollow={(id) => { if (requireAccount()) setFollowed((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) }} liked={liked} followed={followed} uploadFile={uploadFile} onPick={handleUploadPick} caption={newCaption} setCaption={(value) => setNewCaption(sanitizeHighlightCaption(value))} onSubmit={submitHighlight} progress={uploadProgress} error={uploadError} comments={comments} commentTarget={commentTarget} setCommentTarget={setCommentTarget} commentDraft={commentDraft} setCommentDraft={setCommentDraft} onComment={submitComment} onJoin={() => { setAuthMode('register'); setAuthError('') }} />}
+          {page === 'highlights' && <HighlightsView posts={highlights.filter((post) => post.status === 'published' || (post.status === 'pending' && post.name === currentDisplayName))} canPost={canPost} onLike={toggleLike} onSave={toggleSave} onShare={share} onReport={() => notify(canPost ? 'Report sent to the moderation team.' : 'Sign in to report content.')} onFollow={(id) => { if (requireAccount()) setFollowed((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) }} liked={liked} followed={followed} uploadFile={uploadFile} onPick={handleUploadPick} caption={newCaption} setCaption={setNewCaption} onSubmit={submitHighlight} progress={uploadProgress} error={uploadError} comments={comments} commentTarget={commentTarget} setCommentTarget={setCommentTarget} commentDraft={commentDraft} setCommentDraft={setCommentDraft} onComment={submitComment} onJoin={() => { setAuthMode('register'); setAuthError('') }} />}
           {page === 'generator' && <div className="generator-page"><PhotoSourceInput fileName={generatorPhoto?.name ?? ''} status={photoOcrStatus} onPick={handleGeneratorPhoto} /><DraftCategorySelector category={draftCategory} setCategory={setDraftCategory} generated={generated} /><GeneratorView input={generatorInput} setInput={setGeneratorInput} generated={generated} title={draftTitle} setTitle={setDraftTitle} body={draftBody} setBody={setDraftBody} onGenerate={generateDraft} onSave={() => notify('Draft saved to your workspace.')} onPublish={publishGeneratedDraft} /></div>}
           {page === 'search' && <SearchView query={query} setQuery={setQuery} category={category} setCategory={setCategory} results={searchResults} onOpen={openArticle} />}
           {page === 'notifications' && <NotificationsView onOpen={() => navigate('highlights')} />}
@@ -702,7 +721,7 @@ function PageIntro({ eyebrow, title, children, action }: { eyebrow: string; titl
   return <div className="section-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomeView({ items, onNavigate, onOpenArticle, onLike, onSave, onShare, liked, saved, greetingName }: { items: Article[]; onNavigate: (page: Page) => void; onOpenArticle: (article: Article) => void; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (title: string) => void; liked: string[]; saved: string[]; greetingName: string }) {
+function HomeView({ items, onNavigate, onOpenArticle, onLike, onSave, onShare, liked, saved, greetingName, highlights }: { items: Article[]; onNavigate: (page: Page) => void; onOpenArticle: (article: Article) => void; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (title: string) => void; liked: string[]; saved: string[]; greetingName: string; highlights: Highlight[] }) {
   const lead = items[0]
   return <>
     <div className="welcome-row"><div><span className="eyebrow">MONDAY, SEPTEMBER 29, 2026 <span className="live-dot" /> LIVE BRIEFING</span><h1>Good morning, {greetingName}<span className="greeting-period">.</span></h1><p>Here’s what’s moving across the world and your campus.</p></div><button className="date-chip"><Clock3 size={15} /> Your 5-minute read</button></div>
@@ -715,7 +734,7 @@ function HomeView({ items, onNavigate, onOpenArticle, onLike, onSave, onShare, l
       <div className="home-latest"><SectionHeader title="The latest" action="All daily news" onAction={() => onNavigate('daily')} /><div className="latest-list">{items.slice(1, 4).map((item, index) => <CompactStory key={item.id} item={item} index={index + 2} onOpen={onOpenArticle} />)}</div></div>
       <div className="campus-brief"><SectionHeader title="From KIET" action="Campus news" onAction={() => onNavigate('kiet')} /><button className="campus-brief-image" onClick={() => onNavigate('kiet')} style={{ backgroundImage: `url(${campusStories[0].image})` }}><span>ON CAMPUS</span></button><button className="campus-brief-title" onClick={() => onNavigate('kiet')}>{campusStories[0].title}</button><p>Campus Desk <span>·</span> Today</p></div>
     </section>
-    <section className="home-highlights"><SectionHeader title="Campus, unfiltered" action="See all" onAction={() => onNavigate('highlights')} /><div className="highlight-strip">{initialHighlights.slice(0, 3).map((post) => <button key={post.id} className="highlight-teaser" onClick={() => onNavigate('highlights')} style={{ backgroundImage: `linear-gradient(0deg, rgba(15,31,24,.75), transparent 65%), url(${post.image})` }}><span>{post.name}</span><small>{post.caption}</small></button>)}</div></section>
+    <section className="home-highlights"><SectionHeader title="Campus, unfiltered" action="See all" onAction={() => onNavigate('highlights')} /><div className="highlight-strip">{highlights.slice(0, 3).map((post) => <button key={post.id} className="highlight-teaser" onClick={() => onNavigate('highlights')} style={{ backgroundImage: `linear-gradient(0deg, rgba(15,31,24,.75), transparent 65%), url(${post.image})` }}><span>{post.name}</span><small>{post.caption}</small></button>)}</div></section>
   </>
 }
 
@@ -776,7 +795,7 @@ function NewsCard({ item, onOpen, onLike, onSave, onShare, liked, saved }: { ite
 function VideoHighlightCard({ post, liked, followed, comments, commentTarget, commentDraft, onLike, onFollow, onSave, onShare, onReport, onComment, setCommentTarget, setCommentDraft }: { post: Highlight; liked: boolean; followed: boolean; comments: string[]; commentTarget: boolean; commentDraft: string; onLike: () => void; onFollow: () => void; onSave: () => void; onShare: () => void; onReport: () => void; onComment: (event: FormEvent) => void; setCommentTarget: () => void; setCommentDraft: (value: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
-  return <article className="video-highlight-card"><div className="video-viewport"><video ref={videoRef} controls playsInline preload="metadata" poster={post.image} src={post.mediaUrl} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}><track kind="captions" /></video>{!playing && <button className="video-play-overlay" aria-label={`Play video: ${post.caption}`} onClick={() => { void videoRef.current?.play().catch(() => {}) }}><span><Video size={19} fill="currentColor" /></span><strong>Play video</strong></button>}</div><div className="video-highlight-copy"><div className="social-user"><span className="avatar avatar-user">{post.name.split(' ').map((part) => part[0]).join('')}</span><span><strong>{post.name}</strong><small>{post.handle} · {post.time}</small></span><button className={`follow-button ${followed ? 'is-following' : ''}`} onClick={onFollow}>{followed ? 'Following' : 'Follow'}</button></div><p className="social-caption">{post.caption}</p><div className="social-actions"><button className={liked ? 'action-active' : ''} onClick={onLike}><Heart size={18} fill={liked ? 'currentColor' : 'none'} /><span>{post.likes + (liked ? 1 : 0)}</span></button><button onClick={setCommentTarget}><MessageCircle size={18} /><span>{comments.length + 12}</span></button><button aria-label="Share video" onClick={onShare}><Share2 size={17} /></button><button className="save-post" aria-label="Save video" onClick={onSave}><Bookmark size={17} /></button><button aria-label="Report video" onClick={onReport}><Flag size={15} /></button></div>{commentTarget && <div className="comment-area"><div className="comment-list">{comments.slice(-2).map((text, index) => <p key={`${post.id}-${index}`}><strong>You</strong> {text}</p>)}</div><form onSubmit={onComment}><input aria-label="Write a comment on video" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a thoughtful comment..." /><button aria-label="Send comment"><Send size={16} /></button></form></div>}</div></article>
+  return <article className="video-highlight-card"><div className="video-viewport"><video ref={videoRef} controls playsInline preload="metadata" poster={post.image} src={post.mediaUrl} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}><track kind="captions" /></video>{!playing && <button className="video-play-overlay" aria-label={`Play video: ${post.caption}`} onClick={() => { void videoRef.current?.play().catch(() => {}) }}><span><Video size={19} fill="currentColor" /></span><strong>Play video</strong></button>}</div><div className="video-highlight-copy"><div className="social-user"><span className="avatar avatar-user">{getInitials(post.name)}</span><span><strong>{post.name}</strong><small>{post.handle} · {post.time}</small></span><button className={`follow-button ${followed ? 'is-following' : ''}`} onClick={onFollow}>{followed ? 'Following' : 'Follow'}</button></div><p className="social-caption">{post.caption}</p><div className="social-actions"><button className={liked ? 'action-active' : ''} onClick={onLike}><Heart size={18} fill={liked ? 'currentColor' : 'none'} /><span>{post.likes + (liked ? 1 : 0)}</span></button><button onClick={setCommentTarget}><MessageCircle size={18} /><span>{comments.length + 12}</span></button><button aria-label="Share video" onClick={onShare}><Share2 size={17} /></button><button className="save-post" aria-label="Save video" onClick={onSave}><Bookmark size={17} /></button><button aria-label="Report video" onClick={onReport}><Flag size={15} /></button></div>{commentTarget && <div className="comment-area"><div className="comment-list">{comments.slice(-2).map((text, index) => <p key={`${post.id}-${index}`}><strong>You</strong> {text}</p>)}</div><form onSubmit={onComment}><input aria-label="Write a comment on video" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a thoughtful comment..." /><button aria-label="Send comment"><Send size={16} /></button></form></div>}</div></article>
 }
 
 function HighlightsView(props: Parameters<typeof HighlightsViewLegacy>[0]) {
@@ -791,9 +810,9 @@ function HighlightsView(props: Parameters<typeof HighlightsViewLegacy>[0]) {
 function HighlightsViewLegacy({ posts, canPost, onLike, onSave, onShare, onReport, onFollow, liked, followed, uploadFile, onPick, caption, setCaption, onSubmit, progress, error, comments, commentTarget, setCommentTarget, commentDraft, setCommentDraft, onComment, onJoin }: { posts: Highlight[]; canPost: boolean; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (title: string) => void; onReport: () => void; onFollow: (id: string) => void; liked: string[]; followed: string[]; uploadFile: File | null; onPick: (file?: File) => void; caption: string; setCaption: (text: string) => void; onSubmit: (event: FormEvent) => void; progress: number; error: string; comments: Record<string, string[]>; commentTarget: string; setCommentTarget: (id: string) => void; commentDraft: string; setCommentDraft: (text: string) => void; onComment: (event: FormEvent, id: string) => void; onJoin: () => void }) {
   return <>
     <PageIntro eyebrow="STUDENT LIFE, IN FRAME" title="The campus, through your eyes">Moments, milestones and everyday magic from the KIET community.</PageIntro>
-    <div className="highlight-toolbar"><div className="stories-avatars"><span className="avatar avatar-story">AS</span><span className="avatar avatar-story">AM</span><span className="avatar avatar-story">MN</span><span className="avatar avatar-story">KS</span><div><strong>Good things happen here.</strong><small>Join 2,400+ campus voices</small></div></div>{canPost ? <button className="button-dark" onClick={() => document.getElementById('post-caption')?.focus()}><Plus size={16} /> Create a highlight</button> : <button className="button-dark" onClick={onJoin}>Join the community <ArrowRight size={15} /></button>}</div>
-    <div className="highlights-layout"><div className="social-grid">{posts.map((post) => <article className="social-card" key={post.id}><div className="social-card-image" style={{ backgroundImage: `url(${post.image})` }}><span className="social-media-type">{post.type === 'video' ? <Video size={15} /> : <ImagePlus size={15} />}{post.status === 'pending' ? 'PENDING REVIEW' : post.type === 'video' ? 'VIDEO' : 'PHOTO'}</span>{post.type === 'video' && <span className="play-button">▶</span>}<button className="social-more" aria-label="Report post" onClick={onReport}><Flag size={16} /></button></div><div className="social-card-body"><div className="social-user"><span className="avatar avatar-user">{post.name.split(' ').map((part) => part[0]).join('')}</span><span><strong>{post.name}</strong><small>{post.handle} · {post.time}</small></span><button className={`follow-button ${followed.includes(post.id) ? 'is-following' : ''}`} onClick={() => onFollow(post.id)}>{followed.includes(post.id) ? 'Following' : 'Follow'}</button></div><p className="social-caption">{post.caption}</p><div className="social-actions"><button className={liked.includes(post.id) ? 'action-active' : ''} onClick={() => onLike(post.id)}><Heart size={18} fill={liked.includes(post.id) ? 'currentColor' : 'none'} /><span>{post.likes + (liked.includes(post.id) ? 1 : 0)}</span></button><button onClick={() => setCommentTarget(commentTarget === post.id ? '' : post.id)}><MessageCircle size={18} /><span>{(comments[post.id]?.length ?? 0) + 12}</span></button><button aria-label="Share post" onClick={() => onShare(post.caption)}><Share2 size={17} /></button><button className="save-post" aria-label="Save post" onClick={() => onSave(post.id)}><Bookmark size={17} /></button></div>{commentTarget === post.id && <div className="comment-area"><div className="comment-list">{(comments[post.id] ?? []).slice(-2).map((text, index) => <p key={`${post.id}-${index}`}><strong>You</strong> {text} <button onClick={() => setCommentDraft(`@reply `)}>Reply</button></p>)}</div><form onSubmit={(event) => onComment(event, post.id)}><input aria-label="Write a comment" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a thoughtful comment..." /><button aria-label="Send comment"><Send size={16} /></button></form></div>}</div></article>)}</div>
-      <aside className="create-post-panel"><div className="panel-title"><div><span className="eyebrow">YOUR MOMENT</span><h3>Create a highlight</h3></div><span className="panel-icon"><Plus size={17} /></span></div>{canPost ? <form onSubmit={onSubmit}><label className="upload-zone"><input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime" onChange={(event) => onPick(event.target.files?.[0])} /><Upload size={20} /><strong>{uploadFile?.name ?? 'Add a photo or video'}</strong><span>JPG, PNG, WebP, MP4, WebM or MOV · video max 300 MB</span></label><label className="form-label" htmlFor="post-caption">Caption</label><textarea id="post-caption" value={caption} onChange={(event) => setCaption(sanitizeHighlightCaption(event.target.value))} placeholder="What’s happening on campus? #KIET" rows={4} maxLength={500} /><div className="caption-count">{caption.length}/500</div>{error && <p className="form-error">{error}</p>}{progress > 0 && <div className="upload-progress"><span style={{ width: `${progress}%` }} /></div>}<button className="button-dark full-button" disabled={progress > 0}><Send size={15} /> Submit for review</button></form> : <div className="guest-prompt"><Users size={25} /><strong>Your campus story starts here.</strong><p>Sign in to share a moment, follow classmates and join the conversation.</p><button className="button-dark full-button" onClick={onJoin}>Continue as student</button></div>}<div className="community-note"><Shield size={15} /><span>Every post is reviewed against our community guidelines before it goes live.</span></div></aside>
+    <div className="highlight-toolbar"><div className="stories-avatars"><span className="avatar avatar-story">AS</span><span className="avatar avatar-story">AM</span><span className="avatar avatar-story">MN</span><span className="avatar avatar-story">KS</span><div><strong>Good things happen here.</strong><small>Join 2,400+ campus voices</small></div></div>{canPost ? <button className="button-dark" onClick={() => { const el = document.getElementById('post-caption'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus() }}><Plus size={16} /> Create a highlight</button> : <button className="button-dark" onClick={onJoin}>Join the community <ArrowRight size={15} /></button>}</div>
+    <div className="highlights-layout"><div className="social-grid">{posts.map((post) => <article className="social-card" key={post.id}><div className="social-card-image" style={{ backgroundImage: `url(${post.image})` }}><span className="social-media-type">{post.type === 'video' ? <Video size={15} /> : <ImagePlus size={15} />}{post.status === 'pending' ? 'PENDING REVIEW' : post.type === 'video' ? 'VIDEO' : 'PHOTO'}</span>{post.type === 'video' && <span className="play-button">▶</span>}<button className="social-more" aria-label="Report post" onClick={onReport}><Flag size={16} /></button></div><div className="social-card-body"><div className="social-user"><span className="avatar avatar-user">{getInitials(post.name)}</span><span><strong>{post.name}</strong><small>{post.handle} · {post.time}</small></span><button className={`follow-button ${followed.includes(post.id) ? 'is-following' : ''}`} onClick={() => onFollow(post.id)}>{followed.includes(post.id) ? 'Following' : 'Follow'}</button></div><p className="social-caption">{post.caption}</p><div className="social-actions"><button className={liked.includes(post.id) ? 'action-active' : ''} onClick={() => onLike(post.id)}><Heart size={18} fill={liked.includes(post.id) ? 'currentColor' : 'none'} /><span>{post.likes + (liked.includes(post.id) ? 1 : 0)}</span></button><button onClick={() => setCommentTarget(commentTarget === post.id ? '' : post.id)}><MessageCircle size={18} /><span>{(comments[post.id]?.length ?? 0) + 12}</span></button><button aria-label="Share post" onClick={() => onShare(post.caption)}><Share2 size={17} /></button><button className="save-post" aria-label="Save post" onClick={() => onSave(post.id)}><Bookmark size={17} /></button></div>{commentTarget === post.id && <div className="comment-area"><div className="comment-list">{(comments[post.id] ?? []).slice(-2).map((text, index) => <p key={`${post.id}-${index}`}><strong>You</strong> {text} <button onClick={() => setCommentDraft(`@reply `)}>Reply</button></p>)}</div><form onSubmit={(event) => onComment(event, post.id)}><input aria-label="Write a comment" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a thoughtful comment..." /><button aria-label="Send comment"><Send size={16} /></button></form></div>}</div></article>)}</div>
+      <aside className="create-post-panel"><div className="panel-title"><div><span className="eyebrow">YOUR MOMENT</span><h3>Create a highlight</h3></div><span className="panel-icon"><Plus size={17} /></span></div>{canPost ? <form onSubmit={onSubmit}><label className="upload-zone"><input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime" onChange={(event) => onPick(event.target.files?.[0])} /><Upload size={20} /><strong>{uploadFile?.name ?? 'Add a photo or video'}</strong><span>JPG, PNG, WebP, MP4, WebM or MOV · video max 300 MB</span></label><label className="form-label" htmlFor="post-caption">Caption</label><textarea id="post-caption" value={caption} onChange={(event) => setCaption(event.target.value.slice(0, 500))} placeholder="What’s happening on campus? #KIET" rows={4} maxLength={500} /><div className="caption-count">{caption.length}/500</div>{error && <p className="form-error">{error}</p>}{progress > 0 && <div className="upload-progress"><span style={{ width: `${progress}%` }} /></div>}<button className="button-dark full-button" disabled={progress > 0}><Send size={15} /> Submit for review</button></form> : <div className="guest-prompt"><Users size={25} /><strong>Your campus story starts here.</strong><p>Sign in to share a moment, follow classmates and join the conversation.</p><button className="button-dark full-button" onClick={onJoin}>Continue as student</button></div>}<div className="community-note"><Shield size={15} /><span>Every post is reviewed against our community guidelines before it goes live.</span></div></aside>
     </div>
   </>
 }
