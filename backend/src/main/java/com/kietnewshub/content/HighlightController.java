@@ -86,6 +86,10 @@ public class HighlightController {
     public HighlightResponse submit(@RequestParam("media") MultipartFile media,
                                     @RequestParam("caption") @NotBlank @Size(max = 500) String caption,
                                     Authentication authentication) throws IOException {
+        String safeCaption = normalizeCaption(caption);
+        if (safeCaption.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Caption must contain readable text.");
+        }
         if (media.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Media file is required.");
         String contentType = media.getContentType();
         boolean video = contentType != null && VIDEO_TYPES.contains(contentType.toLowerCase());
@@ -102,8 +106,7 @@ public class HighlightController {
         HubUser author = users.findByUsernameIgnoreCase(authentication.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
 
-        if (media.getSize() > VIDEO_LIMIT_BYTES) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Media file exceeds the 300 MB upload limit.");
-        CampusHighlight post = new CampusHighlight(author, caption.trim(), "", contentType);
+        CampusHighlight post = new CampusHighlight(author, safeCaption, "", contentType);
         post.setStatus(HighlightStatus.PUBLISHED);
         post = highlights.save(post);
         mediaFiles.save(new HighlightMedia(post.getId(), contentType, media.getBytes()));
@@ -146,6 +149,16 @@ public class HighlightController {
         post.setCaption(request.caption().trim());
         if (!moderator) post.setStatus(HighlightStatus.PENDING);
         return HighlightResponse.from(highlights.save(post));
+    }
+
+    static String normalizeCaption(String rawCaption) {
+        if (rawCaption == null) return "";
+        String cleaned = rawCaption
+                .replaceAll("[\\p{Cntrl}&&[^\\r\\n\\t]]+", "")
+                .replaceAll("[\\r\\n\\t]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return cleaned.length() > 500 ? cleaned.substring(0, 500).trim() : cleaned;
     }
 
     private String extensionFor(String contentType) {
