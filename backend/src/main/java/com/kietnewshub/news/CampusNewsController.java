@@ -13,7 +13,6 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -81,6 +80,10 @@ public class CampusNewsController {
                                    @Size(max = 1000) String image) {}
     public record CampusNewsStory(String id, String title, String summary, String category, String source,
                                   String image, String status, Instant publishedAt, boolean ownedByCurrentUser) {
+        public static CampusNewsStory from(CampusNewsSubmission item) {
+            return from(item, null);
+        }
+
         public static CampusNewsStory from(CampusNewsSubmission item, Authentication authentication) {
             boolean owner = authentication != null && item.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
             return new CampusNewsStory("k-user-" + item.getId(), item.getTitle(), item.getSummary(), item.getCategory(),

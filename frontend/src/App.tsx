@@ -21,7 +21,7 @@ const demoRoleEntries = Object.entries(roleLabels).filter(([value]) => value !==
 const languages = ['English', 'తెలుగు', 'हिन्दी', 'தமிழ்', 'ಕನ್ನಡ', 'മലയാളം', 'मराठी', 'বাংলা']
 
 const pageTitles: Record<Page, string> = {
-  home: 'Good morning, Rakesh', daily: 'Daily News', kiet: 'KIET News', highlights: 'KIET Highlights',
+  home: 'Good morning', daily: 'Daily News', kiet: 'KIET News', highlights: 'KIET Highlights',
   generator: 'AI News Generator', search: 'Search the hub', notifications: 'Notifications',
   profile: 'Your profile', admin: 'Admin workspace', article: 'Story',
 }
@@ -37,6 +37,7 @@ function App() {
   const [role, setRole] = useState<Role>(() => (window.localStorage.getItem('kiet_role') as Role | null) ?? 'guest')
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem('kiet_access_token') ?? '')
   const [accountName, setAccountName] = useState(() => window.localStorage.getItem('kiet_display_name') ?? '')
+  const [accountUsername, setAccountUsername] = useState(() => window.localStorage.getItem('kiet_username') ?? '')
   const [authMode, setAuthMode] = useState<'register' | 'login' | null>(null)
   const [authName, setAuthName] = useState('')
   const [authUsername, setAuthUsername] = useState('')
@@ -225,6 +226,9 @@ function App() {
   const canPost = Boolean(authToken)
   const isAdmin = Boolean(authToken) && ['admin', 'super-admin'].includes(role)
   const pendingPosts = highlights.filter((post) => post.status === 'pending')
+  const currentDisplayName = accountName || accountUsername || 'Member'
+  const currentGreetingName = accountName || accountUsername || 'Student'
+  const currentInitials = (currentDisplayName || 'M').split(/\s+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'M'
 
   const notify = (message: string) => {
     setToast(message)
@@ -272,11 +276,15 @@ function App() {
       if (!response.ok) throw new Error(result.message ?? result.detail ?? 'Could not complete sign in.')
       const token = result.accessToken as string
       const nextRole = String(result.role).toLowerCase().replace('_', '-') as Role
+      const nextDisplayName = String(result.displayName ?? '')
+      const nextUsername = String(result.username ?? authUsername)
       window.localStorage.setItem('kiet_access_token', token)
       window.localStorage.setItem('kiet_role', nextRole)
-      window.localStorage.setItem('kiet_display_name', String(result.displayName ?? ''))
+      window.localStorage.setItem('kiet_display_name', nextDisplayName)
+      window.localStorage.setItem('kiet_username', nextUsername)
       setAuthToken(token)
-      setAccountName(String(result.displayName ?? ''))
+      setAccountName(nextDisplayName)
+      setAccountUsername(nextUsername)
       setRole(nextRole)
       setAuthMode(null)
       setAuthPassword('')
@@ -299,8 +307,10 @@ function App() {
     window.localStorage.removeItem('kiet_access_token')
     window.localStorage.removeItem('kiet_role')
     window.localStorage.removeItem('kiet_display_name')
+    window.localStorage.removeItem('kiet_username')
     setAuthToken('')
     setAccountName('')
+    setAccountUsername('')
     setRole('guest')
     notify('You are now browsing as a guest.')
   }
@@ -633,7 +643,7 @@ function App() {
         <div className="sidebar-bottom">
           <div className="campus-status"><span className="status-dot" /><span><strong>Campus is live</strong><small>KIET Group of Institutions</small></span><MoreHorizontal size={17} /></div>
           <button className="user-switcher" onClick={() => navigate('profile')}>
-            <span className="avatar avatar-small">RK</span><span className="user-switcher-copy"><strong>Rakesh Kunibilli</strong><small>{roleLabels[role]}</small></span><ChevronDown size={15} />
+            <span className="avatar avatar-small">{currentInitials}</span><span className="user-switcher-copy"><strong>{currentDisplayName}</strong><small>{roleLabels[role]}</small></span><ChevronDown size={15} />
           </button>
         </div>
       </aside>
@@ -652,14 +662,14 @@ function App() {
 
         <div className="page-wrap">
           {page !== 'home' && <div className="page-heading"><button className="back-link" onClick={back}><ArrowLeft size={16} /> Back</button><div className="page-heading-title"><h1>{pageTitles[page]}</h1><span className="heading-rule" /></div></div>}
-          {page === 'home' && <HomeView items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onNavigate={navigate} onOpenArticle={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
+          {page === 'home' && <HomeView items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onNavigate={navigate} onOpenArticle={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} greetingName={currentGreetingName} />}
           {page === 'daily' && <NewsView title="The stories shaping your day" subtitle="A considered briefing from India and around the world." items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
           {page === 'kiet' && <NewsView title="Life at KIET, as it happens" subtitle="Official updates, student stories and ideas from across campus." items={localizedArticles.filter((item) => item.id.startsWith('k'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} campus canSubmit={canPost} pendingSubmissions={campusPending} onJoin={() => { setAuthMode('register'); setAuthError('') }} onCampusSubmit={submitCampusDraft} />}
-          {page === 'highlights' && <HighlightsView posts={highlights.filter((post) => post.status === 'published' || (post.status === 'pending' && post.name === 'Rakesh Kunibilli'))} canPost={canPost} onLike={toggleLike} onSave={toggleSave} onShare={share} onReport={() => notify(canPost ? 'Report sent to the moderation team.' : 'Sign in to report content.')} onFollow={(id) => { if (requireAccount()) setFollowed((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) }} liked={liked} followed={followed} uploadFile={uploadFile} onPick={handleUploadPick} caption={newCaption} setCaption={setNewCaption} onSubmit={submitHighlight} progress={uploadProgress} error={uploadError} comments={comments} commentTarget={commentTarget} setCommentTarget={setCommentTarget} commentDraft={commentDraft} setCommentDraft={setCommentDraft} onComment={submitComment} onJoin={() => { setAuthMode('register'); setAuthError('') }} />}
+          {page === 'highlights' && <HighlightsView posts={highlights.filter((post) => post.status === 'published' || (post.status === 'pending' && post.name === currentDisplayName))} canPost={canPost} onLike={toggleLike} onSave={toggleSave} onShare={share} onReport={() => notify(canPost ? 'Report sent to the moderation team.' : 'Sign in to report content.')} onFollow={(id) => { if (requireAccount()) setFollowed((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) }} liked={liked} followed={followed} uploadFile={uploadFile} onPick={handleUploadPick} caption={newCaption} setCaption={setNewCaption} onSubmit={submitHighlight} progress={uploadProgress} error={uploadError} comments={comments} commentTarget={commentTarget} setCommentTarget={setCommentTarget} commentDraft={commentDraft} setCommentDraft={setCommentDraft} onComment={submitComment} onJoin={() => { setAuthMode('register'); setAuthError('') }} />}
           {page === 'generator' && <div className="generator-page"><PhotoSourceInput fileName={generatorPhoto?.name ?? ''} status={photoOcrStatus} onPick={handleGeneratorPhoto} /><DraftCategorySelector category={draftCategory} setCategory={setDraftCategory} generated={generated} /><GeneratorView input={generatorInput} setInput={setGeneratorInput} generated={generated} title={draftTitle} setTitle={setDraftTitle} body={draftBody} setBody={setDraftBody} onGenerate={generateDraft} onSave={() => notify('Draft saved to your workspace.')} onPublish={publishGeneratedDraft} /></div>}
           {page === 'search' && <SearchView query={query} setQuery={setQuery} category={category} setCategory={setCategory} results={searchResults} onOpen={openArticle} />}
           {page === 'notifications' && <NotificationsView onOpen={() => navigate('highlights')} />}
-          {page === 'profile' && <ProfileView role={role} authenticated={Boolean(authToken)} onRoleChange={setRole} onSignOut={signOut} savedCount={saved.length} postCount={highlights.filter((post) => post.ownedByCurrentUser).length} onNavigate={navigate} />}
+          {page === 'profile' && <ProfileView role={role} authenticated={Boolean(authToken)} displayName={currentDisplayName} username={accountUsername || currentDisplayName} onRoleChange={setRole} onSignOut={signOut} savedCount={saved.length} postCount={highlights.filter((post) => post.ownedByCurrentUser).length} onNavigate={navigate} />}
           {page === 'profile' && Boolean(authToken) && <MyContentManager articles={[...dailyArticles, ...officialCampusStories].filter((item) => item.ownedByCurrentUser)} highlights={highlights.filter((post) => post.ownedByCurrentUser)} onDeleteArticle={deleteArticle} onDeleteHighlight={deleteHighlight} />}
           {page === 'admin' && isAdmin && <><AdminView role={role} activeTab={adminTab} setActiveTab={setAdminTab} pending={pendingPosts} onModerate={moderate} /><CampusReviewPanel posts={campusPending} onReview={moderateCampusNews} /></>}
           {page === 'article' && <ArticleView article={activeArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked.includes(activeArticle.id)} saved={saved.includes(activeArticle.id)} comments={comments[activeArticle.id] ?? []} draft={commentDraft} setDraft={setCommentDraft} onComment={(event) => submitComment(event, activeArticle.id)} canPost={canPost} />}
@@ -684,10 +694,10 @@ function PageIntro({ eyebrow, title, children, action }: { eyebrow: string; titl
   return <div className="section-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomeView({ items, onNavigate, onOpenArticle, onLike, onSave, onShare, liked, saved }: { items: Article[]; onNavigate: (page: Page) => void; onOpenArticle: (article: Article) => void; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (title: string) => void; liked: string[]; saved: string[] }) {
+function HomeView({ items, onNavigate, onOpenArticle, onLike, onSave, onShare, liked, saved, greetingName }: { items: Article[]; onNavigate: (page: Page) => void; onOpenArticle: (article: Article) => void; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (title: string) => void; liked: string[]; saved: string[]; greetingName: string }) {
   const lead = items[0]
   return <>
-    <div className="welcome-row"><div><span className="eyebrow">MONDAY, SEPTEMBER 29, 2026 <span className="live-dot" /> LIVE BRIEFING</span><h1>Good morning, Rakesh<span className="greeting-period">.</span></h1><p>Here’s what’s moving across the world and your campus.</p></div><button className="date-chip"><Clock3 size={15} /> Your 5-minute read</button></div>
+    <div className="welcome-row"><div><span className="eyebrow">MONDAY, SEPTEMBER 29, 2026 <span className="live-dot" /> LIVE BRIEFING</span><h1>Good morning, {greetingName}<span className="greeting-period">.</span></h1><p>Here’s what’s moving across the world and your campus.</p></div><button className="date-chip"><Clock3 size={15} /> Your 5-minute read</button></div>
     <section className="lead-story">
       <button className="lead-image" onClick={() => onOpenArticle(lead)} style={{ backgroundImage: `url(${lead.image})` }} aria-label={`Read ${lead.title}`}><span className="image-credit">PHOTO · KIET MEDIA DESK</span><span className="image-index">01 <i /> 06</span></button>
       <div className="lead-copy"><div className="story-meta"><span className="pill pill-orange">EDITOR’S PICK</span><span>TECHNOLOGY</span><span>·</span><span>4 MIN READ</span></div><button className="headline-button" onClick={() => onOpenArticle(lead)}><h2>{lead.title}</h2></button><p>{lead.summary}</p><div className="byline"><span className="avatar avatar-author">DB</span><span><strong>The Daily Brief</strong><small>News desk · 12 min ago</small></span></div><div className="lead-actions"><button className="button-dark" onClick={() => onOpenArticle(lead)}>Read full story <ArrowRight size={16} /></button><ActionButton icon={Heart} label="Like story" active={liked.includes(lead.id)} onClick={() => onLike(lead.id)} /><ActionButton icon={Bookmark} label="Save story" active={saved.includes(lead.id)} onClick={() => onSave(lead.id)} /><ActionButton icon={Share2} label="Share story" onClick={() => onShare(lead.title)} /></div></div>
@@ -817,9 +827,11 @@ function MyContentManager({ articles, highlights, onDeleteArticle, onDeleteHighl
   return <section className="my-content-manager"><div className="section-header"><h3>My content</h3><span>{articles.length + highlights.length} items</span></div>{articles.map((article) => <div className="my-content-row" key={article.id}><img src={article.image} alt="" /><span><strong>{article.title}</strong><small>{article.category} · News</small></span><button className="icon-button" aria-label={`Delete ${article.title}`} title="Delete story" onClick={() => onDeleteArticle(article)}><Trash2 size={16} /></button></div>)}{highlights.map((post) => <div className="my-content-row" key={post.id}><img src={post.image} alt="" /><span><strong>{post.caption}</strong><small>{post.type === 'video' ? 'Video highlight' : 'Photo highlight'}</small></span><button className="icon-button" aria-label={`Delete ${post.caption}`} title="Delete highlight" onClick={() => onDeleteHighlight(post)}><Trash2 size={16} /></button></div>)}{articles.length + highlights.length === 0 && <p className="my-content-empty">Your uploaded news and highlights will appear here.</p>}</section>
 }
 
-function ProfileView({ role, authenticated, onRoleChange, onSignOut, savedCount, postCount, onNavigate }: { role: Role; authenticated: boolean; onRoleChange: (role: Role) => void; onSignOut: () => void; savedCount: number; postCount: number; onNavigate: (page: Page) => void }) {
-  if (authenticated) return <><div className="profile-cover" style={{ backgroundImage: `linear-gradient(90deg, rgba(20,48,36,.92), rgba(20,48,36,.12)), url(${photos.campus})` }}><span>PLATFORM CREATOR</span><h2>Stories from the KIET community.</h2></div><section className="profile-main"><div className="profile-id"><span className="avatar avatar-profile">RK</span><div><h2>Rakesh Kunibilli <span className="verified-mark"><Check size={12} /></span></h2><p>KIET News Hub creator · Account holder</p><span className="profile-role">{roleLabels[role]}</span></div><button className="button-outline profile-edit" onClick={onSignOut}><LogOut size={15} /> Sign out</button></div><p className="profile-bio">Creator and account holder for KIET News Hub.</p><div className="profile-stats"><div><strong>{postCount}</strong><span>Highlights</span></div><div><strong>{savedCount}</strong><span>Saved stories</span></div></div></section><div className="profile-settings"><button className="profile-link-row" onClick={() => onNavigate('highlights')}><span><Compass size={18} /><strong>Campus highlights</strong></span><ArrowRight size={16} /></button><button className="profile-link-row" onClick={() => onNavigate('search')}><span><Bookmark size={18} /><strong>Saved stories</strong></span><ArrowRight size={16} /></button></div></>
-  if (!authenticated) return <><div className="profile-cover" style={{ backgroundImage: `linear-gradient(90deg, rgba(20,48,36,.92), rgba(20,48,36,.12)), url(${photos.campus})` }}><span>PLATFORM CREATOR</span><h2>Stories from the KIET community.</h2></div><section className="profile-main"><div className="profile-id"><span className="avatar avatar-profile">RK</span><div><h2>Rakesh Kunibilli <span className="verified-mark"><Check size={12} /></span></h2><p>KIET News Hub creator · Account holder</p><span className="profile-role">Demo · {roleLabels[role]}</span></div></div><p className="profile-bio">Creator and account holder for KIET News Hub.</p><div className="profile-stats"><div><strong>{postCount}</strong><span>Highlights</span></div><div><strong>{savedCount}</strong><span>Saved stories</span></div></div></section><div className="profile-settings"><section><span className="eyebrow">DEMO ACCOUNT</span><h3>Explore demo permissions</h3><p>Super Admin access is reserved for the configured platform owner.</p><div className="role-cards">{demoRoleEntries.map(([value, label]) => <button key={value} className={role === value ? 'role-card selected-role' : 'role-card'} onClick={() => onRoleChange(value as Role)}><span>{value === 'guest' ? <Eye size={17} /> : value === 'student' ? <Users size={17} /> : value === 'editor' ? <FileText size={17} /> : <Shield size={17} />}</span><strong>{label}</strong>{role === value && <Check size={15} />}</button>)}</div></section><button className="profile-link-row" onClick={() => onNavigate('highlights')}><span><Compass size={18} /><strong>Campus highlights</strong></span><ArrowRight size={16} /></button><button className="profile-link-row" onClick={() => onNavigate('search')}><span><Bookmark size={18} /><strong>Saved stories</strong></span><ArrowRight size={16} /></button></div></>
+function ProfileView({ role, authenticated, displayName, username, onRoleChange, onSignOut, savedCount, postCount, onNavigate }: { role: Role; authenticated: boolean; displayName: string; username: string; onRoleChange: (role: Role) => void; onSignOut: () => void; savedCount: number; postCount: number; onNavigate: (page: Page) => void }) {
+  const profileName = displayName || username || 'Member'
+  const profileInitials = (profileName || 'M').split(/\s+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'M'
+  if (authenticated) return <><div className="profile-cover" style={{ backgroundImage: `linear-gradient(90deg, rgba(20,48,36,.92), rgba(20,48,36,.12)), url(${photos.campus})` }}><span>PLATFORM CREATOR</span><h2>Stories from the KIET community.</h2></div><section className="profile-main"><div className="profile-id"><span className="avatar avatar-profile">{profileInitials}</span><div><h2>{profileName} <span className="verified-mark"><Check size={12} /></span></h2><p>@{username || profileName.toLowerCase().replace(/[^a-z0-9]+/g, '.')} · Account holder</p><span className="profile-role">{roleLabels[role]}</span></div><button className="button-outline profile-edit" onClick={onSignOut}><LogOut size={15} /> Sign out</button></div><p className="profile-bio">Creator and account holder for KIET News Hub.</p><div className="profile-stats"><div><strong>{postCount}</strong><span>Highlights</span></div><div><strong>{savedCount}</strong><span>Saved stories</span></div></div></section><div className="profile-settings"><button className="profile-link-row" onClick={() => onNavigate('highlights')}><span><Compass size={18} /><strong>Campus highlights</strong></span><ArrowRight size={16} /></button><button className="profile-link-row" onClick={() => onNavigate('search')}><span><Bookmark size={18} /><strong>Saved stories</strong></span><ArrowRight size={16} /></button></div></>
+  if (!authenticated) return <><div className="profile-cover" style={{ backgroundImage: `linear-gradient(90deg, rgba(20,48,36,.92), rgba(20,48,36,.12)), url(${photos.campus})` }}><span>PLATFORM CREATOR</span><h2>Stories from the KIET community.</h2></div><section className="profile-main"><div className="profile-id"><span className="avatar avatar-profile">{profileInitials}</span><div><h2>{profileName} <span className="verified-mark"><Check size={12} /></span></h2><p>@{username || profileName.toLowerCase().replace(/[^a-z0-9]+/g, '.')} · Account holder</p><span className="profile-role">Demo · {roleLabels[role]}</span></div></div><p className="profile-bio">Creator and account holder for KIET News Hub.</p><div className="profile-stats"><div><strong>{postCount}</strong><span>Highlights</span></div><div><strong>{savedCount}</strong><span>Saved stories</span></div></div></section><div className="profile-settings"><section><span className="eyebrow">DEMO ACCOUNT</span><h3>Explore demo permissions</h3><p>Super Admin access is reserved for the configured platform owner.</p><div className="role-cards">{demoRoleEntries.map(([value, label]) => <button key={value} className={role === value ? 'role-card selected-role' : 'role-card'} onClick={() => onRoleChange(value as Role)}><span>{value === 'guest' ? <Eye size={17} /> : value === 'student' ? <Users size={17} /> : value === 'editor' ? <FileText size={17} /> : <Shield size={17} />}</span><strong>{label}</strong>{role === value && <Check size={15} />}</button>)}</div></section><button className="profile-link-row" onClick={() => onNavigate('highlights')}><span><Compass size={18} /><strong>Campus highlights</strong></span><ArrowRight size={16} /></button><button className="profile-link-row" onClick={() => onNavigate('search')}><span><Bookmark size={18} /><strong>Saved stories</strong></span><ArrowRight size={16} /></button></div></>
 }
 
 function AdminView({ role, activeTab, setActiveTab, pending, onModerate }: { role: Role; activeTab: string; setActiveTab: (tab: string) => void; pending: Highlight[]; onModerate: (id: string, status: Highlight['status']) => void }) {

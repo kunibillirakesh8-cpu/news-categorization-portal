@@ -6,8 +6,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public class ApiController {
-    @GetMapping("/api/health")
+    @GetMapping({"/", "/api", "/api/health"})
     public Map<String, String> health() {
-        return Map.of("status", "ok", "service", "kiet-news-hub-api");
+        return Map.of("status", "ok", "service", "kiet-news-hub-api", "message", "API is online");
     }
 }

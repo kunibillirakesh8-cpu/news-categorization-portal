@@ -69,11 +69,11 @@ public class HighlightController {
         if (post.getStatus() != HighlightStatus.PUBLISHED && !owner && !moderator) {
             throw new ResponseStatusException(authentication == null ? HttpStatus.UNAUTHORIZED : HttpStatus.FORBIDDEN);
         }
-        var media = mediaFiles.findById(id);
-        Resource resource = media
+        var storedMedia = mediaFiles.findById(id);
+        Resource resource = storedMedia
             .<Resource>map(media -> new ByteArrayResource(media.getData()))
             .orElseGet(() -> new FileSystemResource(post.getMediaPath()));
-        String mediaType = media.map(HighlightMedia::getContentType).orElse(post.getMediaType());
+        String mediaType = storedMedia.map(HighlightMedia::getContentType).orElse(post.getMediaType());
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType(mediaType))
             .header("X-Content-Type-Options", "nosniff")
@@ -180,6 +180,10 @@ public class HighlightController {
     public record HighlightResponse(Long id, String author, String caption, String mediaUrl, String mediaType,
                                     HighlightStatus status, boolean featured, java.time.Instant createdAt,
                                     boolean ownedByCurrentUser) {
+        static HighlightResponse from(CampusHighlight post) {
+            return from(post, null);
+        }
+
         static HighlightResponse from(CampusHighlight post, Authentication authentication) {
             boolean owner = authentication != null && post.getAuthor().getUsername().equalsIgnoreCase(authentication.getName());
             return new HighlightResponse(post.getId(), post.getAuthor().getDisplayName(), post.getCaption(), "/api/highlights/" + post.getId() + "/media",

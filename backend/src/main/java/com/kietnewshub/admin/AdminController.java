@@ -74,7 +74,7 @@ public class AdminController {
     @GetMapping("/kiet-news/pending")
     public List<com.kietnewshub.news.CampusNewsController.CampusNewsStory> pendingCampusNews() {
         return campusNews.findByStatusOrderByCreatedAtDesc(CampusNewsStatus.PENDING).stream()
-                .map(com.kietnewshub.news.CampusNewsController.CampusNewsStory::from).toList();
+                .map(item -> com.kietnewshub.news.CampusNewsController.CampusNewsStory.from(item, null)).toList();
     }
 
     @PutMapping("/kiet-news/{id}/decision")

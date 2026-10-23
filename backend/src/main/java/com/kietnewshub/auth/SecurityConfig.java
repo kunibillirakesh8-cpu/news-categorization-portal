@@ -24,8 +24,9 @@ public class SecurityConfig {
                 .cors(cors -> {})
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/health", "/api/auth/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/news/**", "/api/highlights", "/api/highlights/*/media").permitAll()
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/", "/error", "/api", "/api/health", "/api/auth/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/news/**", "/api/kiet-news/**", "/api/highlights", "/api/highlights/*/media").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(new JwtAuthenticationFilter(jwtService, users), UsernamePasswordAuthenticationFilter.class)
                 .build();
