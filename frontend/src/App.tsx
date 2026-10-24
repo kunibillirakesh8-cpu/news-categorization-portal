@@ -38,6 +38,24 @@ const sanitizeHighlightCaption = (value: string) => value
   .trim()
   .slice(0, 500)
 
+const waitForApiReady = async () => {
+  const deadline = Date.now() + 90_000
+  while (Date.now() < deadline) {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = await fetch('/api/health', { cache: 'no-store', signal: controller.signal })
+      if (response.ok) return
+    } catch {
+      // Sleeping or restarting APIs may briefly reject health checks.
+    } finally {
+      window.clearTimeout(timeout)
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2_000))
+  }
+  throw new Error('The API is unavailable right now. Please try again shortly.')
+}
+
 const getInitials = (name?: string) => (name || 'Member').trim().split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 2).toUpperCase() || 'M'
 
 function App() {
@@ -72,6 +90,7 @@ function App() {
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadError, setUploadError] = useState('')
+  const [uploadStatus, setUploadStatus] = useState('')
 
   const [comments, setComments] = useState<Record<string, string[]>>({
     p1: ['The light on campus looks unreal here.', 'That courtyard is my favourite study break spot.'],
@@ -84,6 +103,7 @@ function App() {
   const [generatorInput, setGeneratorInput] = useState('')
   const [generatorPhoto, setGeneratorPhoto] = useState<File | null>(null)
   const [photoOcrStatus, setPhotoOcrStatus] = useState('')
+  const [publishingNews, setPublishingNews] = useState(false)
   const [generated, setGenerated] = useState(false)
   const [draftTitle, setDraftTitle] = useState('')
   const [draftBody, setDraftBody] = useState('')
@@ -399,6 +419,7 @@ function App() {
 
   const handleUploadPick = (file?: File) => {
     setUploadError('')
+    setUploadStatus('')
     setUploadFile(null)
     if (!file) return
     const validImageExtensions = /\.(jpe?g|png|webp|jfif|pjpeg)$/i
@@ -410,8 +431,9 @@ function App() {
     setUploadFile(file)
   }
 
-  const submitHighlight = (event: FormEvent) => {
+  const submitHighlight = async (event: FormEvent) => {
     event.preventDefault()
+    if (uploadStatus) return
     if (!uploadFile) return setUploadError('Add a photo or video before submitting.')
     const caption = sanitizeHighlightCaption(newCaption)
     if (!caption) return setUploadError('Add a valid caption for your post.')
@@ -437,13 +459,27 @@ function App() {
       setNewCaption('')
       setUploadFile(null)
       setUploadProgress(0)
+      setUploadStatus('')
       notify(authToken ? 'Published to KIET Highlights.' : 'Published to KIET Highlights (demo mode).')
     }
 
     if (authToken) {
+      setUploadStatus('Connecting to the API…')
+      setUploadError('')
+      setUploadProgress(1)
+      try {
+        await waitForApiReady()
+      } catch (error) {
+        setUploadError(error instanceof Error ? error.message : 'The API is unavailable right now. Please try again shortly.')
+        setUploadStatus('')
+        setUploadProgress(0)
+        return
+      }
+
       const request = new XMLHttpRequest()
       request.open('POST', '/api/highlights')
       request.setRequestHeader('Authorization', `Bearer ${authToken}`)
+      setUploadStatus('Uploading…')
       request.upload.onprogress = (progressEvent) => {
         if (progressEvent.lengthComputable) setUploadProgress(Math.round((progressEvent.loaded / progressEvent.total) * 100))
       }
@@ -457,13 +493,15 @@ function App() {
         if (request.status < 200 || request.status >= 300) {
           setUploadError(result.message ?? result.detail ?? `Upload failed (${request.status}). Please try again.`)
           setUploadProgress(0)
+          setUploadStatus('')
           return
         }
         finishUpload(String(result.id ?? Date.now()), result.mediaUrl)
       }
       request.onerror = () => {
-        setUploadError('The API could not save your upload. Please try again.')
+        setUploadError('The connection to the API was interrupted. Your upload may not have completed; check Highlights before trying again.')
         setUploadProgress(0)
+        setUploadStatus('')
       }
       const formData = new FormData()
       formData.append('media', file)
@@ -503,19 +541,38 @@ function App() {
   }
 
   const handleGeneratorPhoto = async (file?: File) => {
-    setGeneratorPhoto(file ?? null)
+    setGeneratorPhoto(null)
     setPhotoOcrStatus('')
     if (!file) return
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setGeneratorPhoto(null)
+    const extensionType: Record<string, string> = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      jfif: 'image/jpeg',
+      png: 'image/png',
+      webp: 'image/webp',
+    }
+    const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
+    const originalType = file.type.toLowerCase()
+    const contentType = originalType === 'image/jpg' || originalType === 'image/pjpeg'
+      ? 'image/jpeg'
+      : ['image/jpeg', 'image/png', 'image/webp'].includes(originalType)
+        ? originalType
+        : (!originalType || originalType === 'application/octet-stream')
+          ? extensionType[extension] ?? ''
+          : ''
+    if (!contentType) {
       setPhotoOcrStatus('Choose an image file such as JPG, PNG or WebP.')
       return
     }
+    const selectedFile = contentType === originalType
+      ? file
+      : new File([file], file.name, { type: contentType, lastModified: file.lastModified })
+    setGeneratorPhoto(selectedFile)
     setPhotoOcrStatus('Reading text from image…')
     let worker: Awaited<ReturnType<typeof createWorker>> | undefined
     try {
       worker = await createWorker('eng')
-      const result = await worker.recognize(file)
+      const result = await worker.recognize(selectedFile)
       const extractedText = result.data.text.trim()
       if (!extractedText) {
         setPhotoOcrStatus('No readable text found. You can still add source text below.')
@@ -608,12 +665,17 @@ function App() {
   }
 
   const publishGeneratedDraft = async () => {
+    if (publishingNews) return
     if (!requireAccount()) return
     if (!generated || !draftTitle.trim()) return notify('Generate and check the source before publishing.')
     if (!generatorPhoto) return notify('Choose a photo before publishing this news story.')
     const sourceSummary = generatorInput.trim().match(/[^.!?]+[.!?]?/)?.[0].trim() ?? generatorInput.trim()
     const payload = { title: draftTitle.trim(), summary: sourceSummary.slice(0, 1000), body: draftBody, source: 'You', image: '', category: draftCategory }
+    setPublishingNews(true)
+    setPhotoOcrStatus('Connecting to the API…')
     try {
+      await waitForApiReady()
+      setPhotoOcrStatus('Publishing story and photo…')
       const formData = new FormData()
       formData.append('title', payload.title)
       formData.append('summary', payload.summary)
@@ -626,10 +688,15 @@ function App() {
       if (!response.ok) throw new Error(result.message ?? result.detail ?? 'Could not publish this draft.')
       const story: Article = { ...payload, ...result, time: 'Just now', read: '4 min read' }
       setDailyArticles((current) => [story, ...current])
+      setGeneratorPhoto(null)
+      setPhotoOcrStatus('')
       setPage('daily')
       notify(`Published to Daily News · ${draftCategory}.`)
     } catch (error) {
+      setPhotoOcrStatus(error instanceof Error ? error.message : 'Could not publish this draft.')
       notify(error instanceof Error ? error.message : 'Could not publish this draft.')
+    } finally {
+      setPublishingNews(false)
     }
   }
 
@@ -693,7 +760,7 @@ function App() {
           {page === 'daily' && <NewsView title="The stories shaping your day" subtitle="A considered briefing from India and around the world." items={localizedArticles.filter((item) => item.id.startsWith('n') || item.id.startsWith('user-'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} />}
           {page === 'kiet' && <NewsView title="Life at KIET, as it happens" subtitle="Official updates, student stories and ideas from across campus." items={localizedArticles.filter((item) => item.id.startsWith('k'))} onOpen={openArticle} onLike={toggleLike} onSave={toggleSave} onShare={share} liked={liked} saved={saved} campus canSubmit={canPost} pendingSubmissions={campusPending} onJoin={() => { setAuthMode('register'); setAuthError('') }} onCampusSubmit={submitCampusDraft} />}
           {page === 'highlights' && <HighlightsView posts={highlights.filter((post) => post.status === 'published' || (post.status === 'pending' && post.name === currentDisplayName))} canPost={canPost} onLike={toggleLike} onSave={toggleSave} onShare={share} onReport={() => notify(canPost ? 'Report sent to the moderation team.' : 'Sign in to report content.')} onFollow={(id) => { if (requireAccount()) setFollowed((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) }} liked={liked} followed={followed} uploadFile={uploadFile} onPick={handleUploadPick} caption={newCaption} setCaption={setNewCaption} onSubmit={submitHighlight} progress={uploadProgress} error={uploadError} comments={comments} commentTarget={commentTarget} setCommentTarget={setCommentTarget} commentDraft={commentDraft} setCommentDraft={setCommentDraft} onComment={submitComment} onJoin={() => { setAuthMode('register'); setAuthError('') }} />}
-          {page === 'generator' && <div className="generator-page"><PhotoSourceInput fileName={generatorPhoto?.name ?? ''} status={photoOcrStatus} onPick={handleGeneratorPhoto} /><DraftCategorySelector category={draftCategory} setCategory={setDraftCategory} generated={generated} /><GeneratorView input={generatorInput} setInput={setGeneratorInput} generated={generated} title={draftTitle} setTitle={setDraftTitle} body={draftBody} setBody={setDraftBody} onGenerate={generateDraft} onSave={() => notify('Draft saved to your workspace.')} onPublish={publishGeneratedDraft} /></div>}
+          {page === 'generator' && <div className="generator-page"><DraftCategorySelector category={draftCategory} setCategory={setDraftCategory} generated={generated} /><GeneratorView input={generatorInput} setInput={setGeneratorInput} generated={generated} title={draftTitle} setTitle={setDraftTitle} body={draftBody} setBody={setDraftBody} onGenerate={generateDraft} onSave={() => notify('Draft saved to your workspace.')} onPublish={publishGeneratedDraft} fileName={generatorPhoto?.name ?? ''} photoStatus={photoOcrStatus} onPickPhoto={handleGeneratorPhoto} publishing={publishingNews} /></div>}
           {page === 'search' && <SearchView query={query} setQuery={setQuery} category={category} setCategory={setCategory} results={searchResults} onOpen={openArticle} />}
           {page === 'notifications' && <NotificationsView onOpen={() => navigate('highlights')} />}
           {page === 'profile' && <ProfileView role={role} authenticated={Boolean(authToken)} displayName={currentDisplayName} username={accountUsername || currentDisplayName} onRoleChange={setRole} onSignOut={signOut} savedCount={saved.length} postCount={highlights.filter((post) => post.ownedByCurrentUser).length} onNavigate={navigate} />}
@@ -818,7 +885,7 @@ function HighlightsViewLegacy({ posts, canPost, onLike, onSave, onShare, onRepor
 }
 
 function PhotoSourceInput({ fileName, status, onPick }: { fileName: string; status: string; onPick: (file?: File) => void }) {
-  return <div className="photo-source-picker"><label className="generator-photo-upload"><ImagePlus size={17} /><span>{fileName || 'Choose a photo to extract source text'}</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => onPick(event.target.files?.[0])} /></label>{status && <span className="photo-ocr-status" role="status">{status}</span>}</div>
+  return <div className="photo-source-picker"><label className="generator-photo-upload"><ImagePlus size={17} /><span>{fileName || 'Choose a photo for this news story'}</span><input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.jfif,.png,.webp" onChange={(event) => onPick(event.target.files?.[0])} /></label>{status && <span className="photo-ocr-status" role="status">{status}</span>}</div>
 }
 
 function DraftCategorySelector({ generated, category, setCategory }: { generated: boolean; category: string; setCategory: (category: string) => void }) {
@@ -826,12 +893,12 @@ function DraftCategorySelector({ generated, category, setCategory }: { generated
   return <label className="draft-category-picker">Publish in category<select value={category} onChange={(event) => setCategory(event.target.value)}>{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select></label>
 }
 
-function GeneratorView({ input, setInput, generated, title, setTitle, body, setBody, onGenerate, onSave, onPublish }: { input: string; setInput: (text: string) => void; generated: boolean; title: string; setTitle: (text: string) => void; body: string; setBody: (text: string) => void; onGenerate: (event: FormEvent) => void; onSave: () => void; onPublish: () => void }) {
+function GeneratorView({ input, setInput, generated, title, setTitle, body, setBody, onGenerate, onSave, onPublish, fileName, photoStatus, onPickPhoto, publishing }: { input: string; setInput: (text: string) => void; generated: boolean; title: string; setTitle: (text: string) => void; body: string; setBody: (text: string) => void; onGenerate: (event: FormEvent) => void; onSave: () => void; onPublish: () => void; fileName: string; photoStatus: string; onPickPhoto: (file?: File) => void; publishing: boolean }) {
   const [mode, setMode] = useState('Text + data')
   return <>
     <PageIntro eyebrow="AI-ASSISTED EDITING · HUMAN-VERIFIED" title="From source to first draft">Turn your notes into a structured story. Every claim stays yours to verify.</PageIntro>
-    <div className="generator-workspace"><section className="generator-source"><div className="generator-section-head"><div><span className="step-number">01</span><h3>Source material</h3></div><span className="secure-note"><Shield size={13} /> Private workspace</span></div><div className="mode-tabs">{['Text + data', 'Photo', 'Photo + text'].map((item) => <button key={item} className={mode === item ? 'mode-active' : ''} onClick={() => setMode(item)}>{item === 'Photo' || item === 'Photo + text' ? <ImagePlus size={14} /> : <FileText size={14} />}{item}</button>)}</div>{mode !== 'Text + data' && <label className="generator-photo"><ImagePlus size={21} /><span>Choose a reference image</span><input type="file" accept="image/*" /></label>}<label className="form-label" htmlFor="source-material">Paste a source, notes or verified facts</label><textarea id="source-material" className="source-textarea" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Add source material, event notes or verified facts. The AI uses only what you provide." /><div className="source-foot"><span>{input.length} characters</span><span>English <ChevronDown size={13} /></span></div><button className="button-dark generate-button" onClick={(event) => onGenerate(event as unknown as FormEvent)}><Sparkles size={16} /> Generate first draft <ArrowRight size={15} /></button></section>
-      <section className="generator-output"><div className="generator-section-head"><div><span className="step-number">02</span><h3>Editorial draft</h3></div><span className={`draft-status ${generated ? 'draft-ready' : ''}`}><i />{generated ? 'READY TO PUBLISH' : 'WAITING FOR SOURCE'}</span></div>{generated ? <><label className="form-label" htmlFor="draft-title">Headline</label><input id="draft-title" className="draft-title-input" value={title} onChange={(event) => setTitle(event.target.value)} /><label className="form-label" htmlFor="draft-body">Article draft</label><textarea id="draft-body" className="draft-body-input" value={body} onChange={(event) => setBody(event.target.value)} /><div className="human-review"><Shield size={17} /><p><strong>Source check</strong><br />Verify names, dates and every factual claim before publishing.</p></div><div className="draft-actions"><button className="button-outline" onClick={onSave}><Bookmark size={15} /> Save draft</button><button className="button-dark" aria-label="Publish now" onClick={onPublish}><Send size={15} /> Publish now</button></div></> : <div className="empty-draft"><div className="empty-draft-icon"><Sparkles size={22} /></div><strong>Your story takes shape here.</strong><p>Provide source material and the assistant will organize it into a headline, article and summary.</p><div className="draft-preview-lines"><i /><i /><i /><i /><i /></div></div>}</section></div>
+    <div className="generator-workspace"><section className="generator-source"><div className="generator-section-head"><div><span className="step-number">01</span><h3>Source material</h3></div><span className="secure-note"><Shield size={13} /> Private workspace</span></div><div className="mode-tabs">{['Text + data', 'Photo', 'Photo + text'].map((item) => <button key={item} className={mode === item ? 'mode-active' : ''} onClick={() => setMode(item)}>{item === 'Photo' || item === 'Photo + text' ? <ImagePlus size={14} /> : <FileText size={14} />}{item}</button>)}</div><PhotoSourceInput fileName={fileName} status={photoStatus} onPick={onPickPhoto} /><label className="form-label" htmlFor="source-material">Paste a source, notes or verified facts</label><textarea id="source-material" className="source-textarea" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Add source material, event notes or verified facts. The AI uses only what you provide." /><div className="source-foot"><span>{input.length} characters</span><span>English <ChevronDown size={13} /></span></div><button className="button-dark generate-button" onClick={(event) => onGenerate(event as unknown as FormEvent)}><Sparkles size={16} /> Generate first draft <ArrowRight size={15} /></button></section>
+      <section className="generator-output"><div className="generator-section-head"><div><span className="step-number">02</span><h3>Editorial draft</h3></div><span className={`draft-status ${generated ? 'draft-ready' : ''}`}><i />{generated ? 'READY TO PUBLISH' : 'WAITING FOR SOURCE'}</span></div>{generated ? <><label className="form-label" htmlFor="draft-title">Headline</label><input id="draft-title" className="draft-title-input" value={title} onChange={(event) => setTitle(event.target.value)} /><label className="form-label" htmlFor="draft-body">Article draft</label><textarea id="draft-body" className="draft-body-input" value={body} onChange={(event) => setBody(event.target.value)} /><div className="human-review"><Shield size={17} /><p><strong>Source check</strong><br />Verify names, dates and every factual claim before publishing.</p></div><div className="draft-actions"><button className="button-outline" onClick={onSave}><Bookmark size={15} /> Save draft</button><button className="button-dark" aria-label="Publish now" onClick={onPublish} disabled={publishing}><Send size={15} /> {publishing ? 'Publishing…' : 'Publish now'}</button></div></> : <div className="empty-draft"><div className="empty-draft-icon"><Sparkles size={22} /></div><strong>Your story takes shape here.</strong><p>Provide source material and the assistant will organize it into a headline, article and summary.</p><div className="draft-preview-lines"><i /><i /><i /><i /><i /></div></div>}</section></div>
     <div className="generator-footnote"><Zap size={15} /><span>Demo mode uses extractive drafting only. It does not call a generative model or add facts; category selection and human verification are required.</span></div>
   </>
 }
