@@ -56,6 +56,8 @@ const waitForApiReady = async () => {
   throw new Error('The API is unavailable right now. Please try again shortly.')
 }
 
+const NEWS_PHOTO_LIMIT_BYTES = 25 * 1024 * 1024
+
 const getInitials = (name?: string) => (name || 'Member').trim().split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 2).toUpperCase() || 'M'
 
 function App() {
@@ -564,6 +566,10 @@ function App() {
       setPhotoOcrStatus('Choose an image file such as JPG, PNG or WebP.')
       return
     }
+    if (file.size > NEWS_PHOTO_LIMIT_BYTES) {
+      setPhotoOcrStatus('Article photos must be 25 MB or smaller.')
+      return
+    }
     const selectedFile = contentType === originalType
       ? file
       : new File([file], file.name, { type: contentType, lastModified: file.lastModified })
@@ -684,9 +690,18 @@ function App() {
       formData.append('category', payload.category)
       formData.append('photo', generatorPhoto)
       const response = await fetch('/api/news', { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: formData })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.message ?? result.detail ?? 'Could not publish this draft.')
-      const story: Article = { ...payload, ...result, time: 'Just now', read: '4 min read' }
+      const responseText = await response.text()
+      let result: { id?: string; message?: string; detail?: string; error?: string } = {}
+      try {
+        result = JSON.parse(responseText || '{}')
+      } catch {
+        if (response.ok) throw new Error(`The API returned an unreadable response (HTTP ${response.status}).`)
+      }
+      if (!response.ok) {
+        throw new Error(result.message ?? result.detail ?? result.error ?? `Could not publish this draft (HTTP ${response.status}).`)
+      }
+      if (!result.id) throw new Error('The API did not return the published story.')
+      const story: Article = { ...payload, ...result, id: result.id, time: 'Just now', read: '4 min read' }
       setDailyArticles((current) => [story, ...current])
       setGeneratorPhoto(null)
       setPhotoOcrStatus('')
@@ -885,7 +900,7 @@ function HighlightsViewLegacy({ posts, canPost, onLike, onSave, onShare, onRepor
 }
 
 function PhotoSourceInput({ fileName, status, onPick }: { fileName: string; status: string; onPick: (file?: File) => void }) {
-  return <div className="photo-source-picker"><label className="generator-photo-upload"><ImagePlus size={17} /><span>{fileName || 'Choose a photo for this news story'}</span><input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.jfif,.png,.webp" onChange={(event) => onPick(event.target.files?.[0])} /></label>{status && <span className="photo-ocr-status" role="status">{status}</span>}</div>
+  return <div className="photo-source-picker"><label className="generator-photo-upload"><ImagePlus size={17} /><span>{fileName || 'Choose a photo for this news story (max 25 MB)'}</span><input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.jfif,.png,.webp" onChange={(event) => onPick(event.target.files?.[0])} /></label>{status && <span className="photo-ocr-status" role="status">{status}</span>}</div>
 }
 
 function DraftCategorySelector({ generated, category, setCategory }: { generated: boolean; category: string; setCategory: (category: string) => void }) {

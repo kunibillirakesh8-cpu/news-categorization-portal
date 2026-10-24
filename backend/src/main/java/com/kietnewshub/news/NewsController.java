@@ -45,6 +45,7 @@ import org.xml.sax.InputSource;
 @RestController
 @RequestMapping("/api/news")
 public class NewsController {
+    private static final long ARTICLE_PHOTO_LIMIT_BYTES = 25L * 1024 * 1024;
     private static final Set<String> DAILY_CATEGORIES = Set.of("India", "Telangana", "Hyderabad", "Education", "Technology", "AI", "Science", "Business", "Sports", "Entertainment", "World", "Jobs");
     private final NewsClassificationService classifier;
     private final UserNewsRepository userNews;
@@ -188,11 +189,11 @@ public class NewsController {
     @PostMapping(consumes = "multipart/form-data")
     @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
     @Transactional
-    public NewsStory publish(@RequestParam @NotBlank @Size(max = 180) String title,
-                             @RequestParam @NotBlank @Size(max = 1000) String summary,
-                             @RequestParam @NotBlank @Size(max = 20000) String body,
-                             @RequestParam @NotBlank @Size(max = 90) String source,
-                             @RequestParam @NotBlank String category,
+    public NewsStory publish(@RequestParam("title") @NotBlank @Size(max = 180) String title,
+                             @RequestParam("summary") @NotBlank @Size(max = 1000) String summary,
+                             @RequestParam("body") @NotBlank @Size(max = 20000) String body,
+                             @RequestParam("source") @NotBlank @Size(max = 90) String source,
+                             @RequestParam("category") @NotBlank String category,
                              @RequestParam("photo") MultipartFile photo,
                              Authentication authentication) throws IOException {
         if (!DAILY_CATEGORIES.contains(category)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a supported Daily News category.");
@@ -227,7 +228,7 @@ public class NewsController {
     }
 
     private String validateGeneratedPhoto(MultipartFile photo) throws IOException {
-        if (photo.getSize() > 10L * 1024 * 1024) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Article photos must be 10 MB or smaller.");
+        if (photo.getSize() > ARTICLE_PHOTO_LIMIT_BYTES) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Article photos must be 25 MB or smaller.");
         String contentType = photo.getContentType();
         if (contentType == null || !Set.of("image/jpeg", "image/png", "image/webp").contains(contentType.toLowerCase())) {
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Use a JPG, PNG or WebP article photo.");
