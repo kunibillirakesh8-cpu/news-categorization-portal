@@ -187,7 +187,7 @@ public class NewsController {
     }
 
     @PostMapping(consumes = "multipart/form-data")
-    @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("isAuthenticated()")
     @Transactional
     public NewsStory publish(@RequestParam("title") @NotBlank @Size(max = 180) String title,
                              @RequestParam("summary") @NotBlank @Size(max = 1000) String summary,

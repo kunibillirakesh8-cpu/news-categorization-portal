@@ -82,7 +82,7 @@ public class HighlightController {
     }
 
     @PostMapping(consumes = "multipart/form-data")
-    @PreAuthorize("hasAnyRole('STUDENT','EDITOR','ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("isAuthenticated()")
     @Transactional
     public HighlightResponse submit(@RequestParam("media") MultipartFile media,
                                     @RequestParam("caption") @NotBlank @Size(max = 500) String caption,

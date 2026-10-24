@@ -347,6 +347,19 @@ function App() {
     notify('You are now browsing as a guest.')
   }
 
+  const requestSignInAgain = () => {
+    window.localStorage.removeItem('kiet_access_token')
+    window.localStorage.removeItem('kiet_role')
+    window.localStorage.removeItem('kiet_display_name')
+    window.localStorage.removeItem('kiet_username')
+    setAuthToken('')
+    setAccountName('')
+    setAccountUsername('')
+    setRole('guest')
+    setAuthMode('login')
+    setAuthError('Your session expired or no longer has publishing access. Sign in again to continue.')
+  }
+
   const toggleLike = (id: string) => {
     if (!requireAccount()) return
     setLiked((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
@@ -493,7 +506,12 @@ function App() {
           // Response is non-JSON
         }
         if (request.status < 200 || request.status >= 300) {
-          setUploadError(result.message ?? result.detail ?? `Upload failed (${request.status}). Please try again.`)
+          if (request.status === 401 || request.status === 403) {
+            setUploadError('Your session expired or no longer has publishing access. Sign in again to retry.')
+            requestSignInAgain()
+          } else {
+            setUploadError(result.message ?? result.detail ?? `Upload failed (${request.status}). Please try again.`)
+          }
           setUploadProgress(0)
           setUploadStatus('')
           return
@@ -673,6 +691,11 @@ function App() {
   const publishGeneratedDraft = async () => {
     if (publishingNews) return
     if (!requireAccount()) return
+    if (!authToken) {
+      setAuthMode('login')
+      setAuthError('Sign in with your account to publish this news story.')
+      return
+    }
     if (!generated || !draftTitle.trim()) return notify('Generate and check the source before publishing.')
     if (!generatorPhoto) return notify('Choose a photo before publishing this news story.')
     const sourceSummary = generatorInput.trim().match(/[^.!?]+[.!?]?/)?.[0].trim() ?? generatorInput.trim()
@@ -698,6 +721,10 @@ function App() {
         if (response.ok) throw new Error(`The API returned an unreadable response (HTTP ${response.status}).`)
       }
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          requestSignInAgain()
+          throw new Error('Your session expired or no longer has publishing access. Sign in again to retry.')
+        }
         throw new Error(result.message ?? result.detail ?? result.error ?? `Could not publish this draft (HTTP ${response.status}).`)
       }
       if (!result.id) throw new Error('The API did not return the published story.')
